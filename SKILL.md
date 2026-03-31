@@ -1,130 +1,287 @@
 ---
 name: web-software-tester
-description: Web 端软件测试技能。支持自动探索网页、运行功能测试、解析 Excel/CSV/JSON 测试用例数据，并生成 Markdown/PDF/Word 格式的详细测试报告。触发场景：用户要求测试网站/网页、对页面进行自动化测试、生成测试报告、运行回归测试、验证表单/登录/按钮等功能。
+description: Web 业务驱动测试技能。支持自动爬取网站构建页面树、分析页面功能、保存 HTML 和 API 数据、进行业务建模、生成业务逻辑文档、基于业务逻辑自动生成测试用例并执行，最终输出基于业务的测试报告。触发场景：用户要求测试网站/网页、进行业务流程测试、生成业务测试报告、理解网站业务逻辑、进行回归测试。
 ---
 
-# Web 软件测试技能
+# Web 软件测试技能（业务驱动）
 
-## 工作流程
+本技能通过分析网站业务逻辑，自动生成并执行基于业务场景的测试用例。
 
-### Step 1：接收测试需求
+## 工作流程概览
 
-用户通常会提供以下信息（不一定全部提供，有多少用多少）：
+```
+目标 URL → 爬取采集 → 页面分析 → 业务建模 → 生成用例 → 执行测试 → 生成报告
+```
 
-- **目标 URL**：要测试的网页地址
-- **用户名/密码**：用于登录测试（可选）
-- **测试用例文件**：Excel / CSV / JSON 格式的测试数据（可选）
-- **报告格式**：Markdown / PDF / Word（默认询问用户）
+## 阶段说明
 
-如果用户没有提供测试用例文件，引导用户上传或手动输入测试数据。
+### 阶段 1: 数据采集（crawler）
 
-### Step 2：页面探索（自动探索模式）
-
-使用 `browser` 工具打开目标 URL：
-
-1. 打开页面并等待加载完成
-2. 使用 `browser snapshot` 获取页面结构
-3. 截图保存初始页面状态
-4. 识别可测试元素：表单、按钮、链接、输入框等
-
-**注意**：如果提供了用户名密码，先尝试登录流程。
-
-### Step 3：与用户确认测试计划
-
-探索完成后，向用户展示发现的页面功能，然后询问：
-
-- 是否要运行**功能测试**？
-- 是否上传**测试用例数据文件**（Excel/CSV/JSON）？
-- 报告要什么格式（Markdown / PDF / Word）？
-
-> 如果用户提供了测试用例文件，使用 `scripts/parse_cases.py` 解析内容（支持 .xlsx/.csv/.json）。
-
-### Step 4：执行测试
-
-根据用户确认的计划执行测试。测试类型包括：
-
-| 测试类型 | 说明 |
-|----------|------|
-| `navigation` | 页面跳转、链接点击 |
-| `form_submit` | 表单提交、输入验证 |
-| `login` | 登录/登出流程 |
-| `button_click` | 按钮点击响应 |
-| `api_check` | API 请求/响应检查 |
-
-**执行要点**：
-- 每个测试步骤都记录响应时间
-- 失败时立即截图保存
-- 如果没有提供测试数据，跳过数据填充测试，仅测试基础功能
-
-### Step 5：生成报告
-
-使用 `scripts/test_runner.py` 生成报告：
+爬取目标网站，构建页面树，保存 HTML 代码，嗅探 API 端点。
 
 ```bash
-python3 ~/.qclaw/skills/web-software-tester/scripts/test_runner.py \
-  --config '{"url": "https://example.com", "auto_explore": true}' \
-  --cases /path/to/test_data.xlsx \
+python3 scripts/crawler.py <URL> --output-dir ./test_data --max-depth 3
+```
+
+**输出：**
+- `page_tree.json` - 页面树结构（页面间关联关系）
+- `pages/*.html` - 各页面原始 HTML
+- `pages/*_meta.json` - 页面元数据（表单、按钮、链接等）
+- `apis/api_records.json` - API 调用记录（URL、方法、参数、响应样例）
+
+**参数说明：**
+- `--max-depth N` - 最大爬取深度（默认 3）
+- `--delay SEC` - 请求间隔（默认 0.5 秒）
+- `--use-playwright` - 使用 Playwright 渲染动态页面（需要安装 playwright）
+
+### 阶段 2: 页面功能分析（page_analyzer）
+
+分析采集的页面数据，识别页面类型和功能。
+
+```bash
+python3 scripts/page_analyzer.py --input-dir ./test_data --output ./test_data/page_analysis.json
+```
+
+**分析内容：**
+- 页面类型检测（登录页、注册页、搜索页、列表页等）
+- 表单功能分析（登录、注册、搜索、提交等）
+- 用户交互流程识别
+- 数据实体提取
+
+**输出：**
+- `page_analysis.json` - 各页面的详细功能分析
+
+### 阶段 3: 业务建模（business_modeler）
+
+基于采集数据生成业务逻辑文档。
+
+```bash
+python3 scripts/business_modeler.py --input-dir ./test_data --output ./test_data/business_logic.md
+```
+
+**生成内容：**
+- 业务实体定义（用户、订单、商品等）
+- 业务流程描述（登录流程、注册流程、下单流程等）
+- 页面与功能映射
+- API 与功能映射
+
+**输出：**
+- `business_logic.md` - Markdown 格式业务逻辑文档
+
+### 阶段 4: 测试用例生成（test_generator）
+
+基于业务逻辑自动生成测试用例。
+
+```bash
+python3 scripts/test_generator.py \
+  --business-doc ./test_data/business_logic.md \
+  --page-analysis ./test_data/page_analysis.json \
+  --output ./test_data/test_cases.json
+```
+
+**生成用例类型：**
+- 业务流程测试（主流程 + 异常分支）
+- 页面功能测试（导航、元素存在性）
+- API 接口测试（可访问性、响应验证）
+- 跨页面端到端测试
+
+**输出：**
+- `test_cases.json` - 机器可读测试用例
+- `test_cases.csv` - 人工可读测试用例（表格格式）
+
+### 阶段 5: 测试执行（test_runner）
+
+执行生成的测试用例。
+
+```bash
+python3 scripts/test_runner.py \
+  --config '{"url": "<目标URL>"}' \
+  --cases ./test_data/test_cases.json \
+  --output-dir ./test_results
+```
+
+**测试模式：**
+- **静态模式**（默认）：使用 requests + BeautifulSoup，速度快，适合静态页面
+- **Playwright 模式**（加 `--use-playwright`）：真实浏览器，支持 JS 交互和截图
+
+**输出：**
+- `test_results.json` - 详细测试结果
+- `screenshots/*.png` - 失败截图（Playwright 模式）
+
+### 阶段 6: 报告生成（report_generator）
+
+生成基于业务的测试报告。
+
+```bash
+python3 scripts/report_generator.py \
+  --test-results ./test_results/test_results.json \
+  --business-doc ./test_data/business_logic.md \
   --format markdown \
-  --report-output /tmp/test_report.md
+  --output ./test_report.md
 ```
 
-**报告内容**（全部包含）：
-- ✅ 每个测试用例的通过/失败状态
-- 📸 失败时的页面截图（保存到 `screenshots/` 目录）
-- ⏱️ 每个操作的响应时间
-- 🐛 发现的 Bug 描述（失败原因 + 期望行为 vs 实际行为）
-- 📊 测试概览：总数、通过数、失败数、通过率
+**报告内容：**
+- 执行摘要（通过率、状态评估）
+- 业务流程测试结果（按流程分组）
+- 按测试类型分类的详细结果
+- 失败详情与 Bug 描述
+- 改进建议
 
-**格式转换**：
-- Markdown → 直接保存
-- PDF → 使用 `scripts/convert_to_pdf.py` 转换（需要 weasyprint）
-- Word → 使用 `scripts/convert_to_docx.py` 转换（需要 python-docx）
+**输出格式：**
+- Markdown（默认）
+- HTML（加 `--format html`）
 
-## 脚本说明
+### 格式转换（可选）
 
-| 脚本 | 用途 |
-|------|------|
-| `scripts/page_explorer.py` | 页面探索辅助（参数解析 + 结果格式定义） |
-| `scripts/test_runner.py` | 测试执行器 + 报告生成（Markdown/HTML） |
-| `scripts/parse_cases.py` | 解析 Excel/CSV/JSON 测试用例 |
-| `scripts/convert_to_pdf.py` | Markdown → PDF 转换 |
-| `scripts/convert_to_docx.py` | Markdown → Word 转换 |
+将 Markdown 报告转换为 PDF 或 Word：
 
-## 测试用例格式
+```bash
+# 转 PDF（需要 weasyprint 或生成可打印 HTML）
+python3 scripts/convert_to_pdf.py ./test_report.md -o ./test_report
 
-### CSV 格式示例
-
-```csv
-name,type,selector,value,expected
-测试登录-正确账号,login,input[name=username],admin,登录成功
-测试登录-错误密码,login,input[name=password],wrongpass,提示错误
-测试搜索功能,form_submit,input[name=q],keyword,显示结果
+# 转 Word（需要 python-docx）
+python3 scripts/convert_to_docx.py ./test_report.md -o ./test_report.docx
 ```
 
-### JSON 格式示例
+## 完整端到端流程
+
+一次性执行完整测试流程：
+
+```bash
+# 1. 设置变量
+URL="https://example.com"
+DATA_DIR="./test_data"
+RESULTS_DIR="./test_results"
+
+# 2. 爬取网站
+python3 scripts/crawler.py "$URL" --output-dir "$DATA_DIR" --max-depth 2
+
+# 3. 分析页面
+python3 scripts/page_analyzer.py --input-dir "$DATA_DIR" --output "$DATA_DIR/page_analysis.json"
+
+# 4. 业务建模
+python3 scripts/business_modeler.py --input-dir "$DATA_DIR" --output "$DATA_DIR/business_logic.md"
+
+# 5. 生成测试用例
+python3 scripts/test_generator.py \
+  --business-doc "$DATA_DIR/business_logic.md" \
+  --page-analysis "$DATA_DIR/page_analysis.json" \
+  --output "$DATA_DIR/test_cases.json"
+
+# 6. 执行测试
+python3 scripts/test_runner.py \
+  --config "{\"url\": \"$URL\"}" \
+  --cases "$DATA_DIR/test_cases.json" \
+  --output-dir "$RESULTS_DIR"
+
+# 7. 生成报告
+python3 scripts/report_generator.py \
+  --test-results "$RESULTS_DIR/test_results.json" \
+  --business-doc "$DATA_DIR/business_logic.md" \
+  --output "./test_report.md"
+
+echo "✅ 测试完成！报告: ./test_report.md"
+```
+
+## 测试用例字段说明
+
+生成的测试用例 JSON 结构：
 
 ```json
-[
-  {
-    "name": "测试登录-正确账号",
-    "type": "login",
-    "selector": "input[name=username]",
-    "value": "admin",
-    "expected": "登录成功"
-  }
-]
+{
+  "id": "FLOW_001",
+  "name": "用户登录 - 主流程测试",
+  "type": "business_flow",
+  "category": "positive",
+  "description": "验证用户登录主流程可以正常完成",
+  "url": "https://example.com/login",
+  "selector": "",
+  "value": "",
+  "expected": "登录成功",
+  "priority": "high",
+  "steps": ["访问登录页面", "输入用户名", "输入密码", "点击登录"],
+  "source_flow": "用户登录"
+}
 ```
 
-### Excel 格式
+**字段说明：**
 
-第一行为表头，后续每行一个用例。支持的表头字段：`name`, `type`, `selector`, `value`, `expected`, `wait_ms`。
+| 字段 | 说明 |
+|------|------|
+| `id` | 唯一标识 |
+| `name` | 测试用例名称 |
+| `type` | 测试类型：business_flow, navigation, element_check, api_check, form_submit |
+| `category` | 测试分类：positive（正向）, negative（异常） |
+| `description` | 测试描述 |
+| `url` | 目标页面 URL |
+| `selector` | 元素选择器（用于 element_check） |
+| `value` | 输入值或 API 端点 |
+| `expected` | 期望结果 |
+| `priority` | 优先级：high, medium, low |
+| `steps` | 测试步骤列表（用于 business_flow） |
+| `source_flow` | 所属业务流程 |
+
+## 依赖安装
+
+```bash
+# 核心依赖
+pip install requests beautifulsoup4
+
+# 可选依赖（用于 Excel/Word 支持）
+pip install openpyxl python-docx
+
+# 可选依赖（用于真实浏览器测试）
+pip install playwright
+playwright install chromium
+
+# 可选依赖（用于 PDF 生成）
+pip install weasyprint
+```
 
 ## 注意事项
 
-- 内网/外网 URL 均可测试
-- 如果页面需要登录，先完成登录再进行其他测试
-- 截图统一保存在 `screenshots/` 子目录下
-- 报告中的截图路径使用相对路径 `../screenshots/xxx.png`
-- PDF 转换需要安装依赖：`pip install weasyprint`
-- Word 转换需要安装依赖：`pip install python-docx`
-- 如果测试用例文件不存在或格式错误，跳过该文件并继续执行
+1. **爬取限制**
+   - 遵守网站的 robots.txt
+   - 合理设置爬取延迟（`--delay`）
+   - 限制爬取深度避免过度采集
+
+2. **动态页面**
+   - 静态模式无法执行 JavaScript
+   - 需要测试 JS 交互时请使用 `--use-playwright`
+   - Playwright 模式速度较慢但更真实
+
+3. **业务建模局限**
+   - 自动生成的业务逻辑文档是初版，建议人工审核
+   - 复杂业务逻辑可能需要手动补充
+   - 测试用例覆盖率取决于页面分析的完整性
+
+4. **测试执行**
+   - 静态模式下表单提交可能不完整（无法执行 JS 验证）
+   - 涉及登录态的测试需要先在配置中提供凭证
+   - API 测试可能受限于认证机制
+
+## 扩展功能
+
+### 使用外部测试用例
+
+除了自动生成的用例，也可以导入外部测试用例：
+
+```bash
+python3 scripts/test_runner.py --cases ./my_custom_cases.csv --output-dir ./test_results
+```
+
+CSV 格式：
+```csv
+id,name,type,url,selector,value,expected
+TC001,自定义测试,navigation,https://example.com,,,200
+TC002,元素检查,element_check,https://example.com,h1,,Welcome
+```
+
+### 手动补充业务逻辑
+
+自动生成的 `business_logic.md` 是初版，建议人工审核后补充：
+- 添加业务规则说明
+- 补充异常流程
+- 完善数据实体定义
+
+修改后的业务文档可以重新用于生成测试用例。

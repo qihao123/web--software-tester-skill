@@ -1,97 +1,151 @@
 # Web Software Tester
 
-Web 端软件测试技能，支持自动探索网页、运行功能测试、解析测试用例数据，并生成详细测试报告。
+Web 业务驱动测试技能，支持自动爬取网站、分析业务逻辑、生成基于业务场景的测试用例并执行。
 
 ## 功能特性
 
-- 🌐 **页面自动探索** - 自动发现可测试元素（表单、按钮、链接等）
-- 🧪 **多功能测试** - 支持导航、表单提交、登录、按钮点击、API 检查
-- 📊 **多格式支持** - Excel、CSV、JSON 测试用例解析
-- 📝 **丰富报告** - 生成 Markdown/PDF/Word 格式测试报告
+- 🕷️ **网站爬取** - 自动构建页面树，保存 HTML 和 API 数据
+- 📊 **业务建模** - 自动识别业务实体和业务流程
+- 🧪 **智能用例生成** - 基于业务逻辑自动生成测试用例
+- 📈 **业务视角报告** - 按业务流程组织的测试报告
 - 📸 **失败截图** - 测试失败时自动保存页面状态
+- 🔄 **端到端测试** - 支持完整的业务流程测试
+- 💰 **Token 节省** - 相比直接页面分析，显著降低 token 消耗（实测 12306 网站从数百万 token 降至 100 万出头）
 
-## 测试类型
+## 工作流程
 
-| 类型 | 说明 |
+```
+目标 URL → 爬取采集 → 页面分析 → 业务建模 → 生成用例 → 执行测试 → 生成报告
+```
+
+## 脚本列表
+
+| 脚本 | 用途 |
 |------|------|
-| `navigation` | 页面跳转、链接点击 |
-| `form_submit` | 表单提交、输入验证 |
-| `login` | 登录/登出流程 |
-| `button_click` | 按钮点击响应 |
-| `api_check` | API 请求/响应检查 |
+| `crawler.py` | 爬取网站，构建页面树，保存 HTML，嗅探 API |
+| `page_analyzer.py` | 分析页面功能，识别页面类型和交互流程 |
+| `business_modeler.py` | 基于采集数据生成业务逻辑文档 |
+| `test_generator.py` | 基于业务逻辑生成测试用例 |
+| `test_runner.py` | 执行测试用例，记录结果 |
+| `report_generator.py` | 生成基于业务的测试报告 |
+| `convert_to_pdf.py` | Markdown → PDF 转换 |
+| `convert_to_docx.py` | Markdown → Word 转换 |
+| `parse_cases.py` | 解析外部测试用例（Excel/CSV/JSON）|
 
 ## 快速开始
 
 ### 安装依赖
 
 ```bash
-pip install weasyprint python-docx
+pip install requests beautifulsoup4
+
+# 可选依赖
+pip install openpyxl python-docx  # Excel/Word 支持
+pip install playwright && playwright install chromium  # 真实浏览器测试
 ```
 
-### 运行测试
+### 端到端测试流程
 
 ```bash
+# 设置目标 URL
+URL="https://example.com"
+DATA_DIR="./test_data"
+RESULTS_DIR="./test_results"
+
+# 1. 爬取网站
+python3 scripts/crawler.py "$URL" --output-dir "$DATA_DIR" --max-depth 2
+
+# 2. 分析页面
+python3 scripts/page_analyzer.py --input-dir "$DATA_DIR" --output "$DATA_DIR/page_analysis.json"
+
+# 3. 业务建模
+python3 scripts/business_modeler.py --input-dir "$DATA_DIR" --output "$DATA_DIR/business_logic.md"
+
+# 4. 生成测试用例
+python3 scripts/test_generator.py \
+  --business-doc "$DATA_DIR/business_logic.md" \
+  --page-analysis "$DATA_DIR/page_analysis.json" \
+  --output "$DATA_DIR/test_cases.json"
+
+# 5. 执行测试
 python3 scripts/test_runner.py \
-  --config '{"url": "https://example.com", "auto_explore": true}' \
-  --cases /path/to/test_data.xlsx \
-  --format markdown \
-  --report-output /tmp/test_report.md
-```
+  --config "{\"url\": \"$URL\"}" \
+  --cases "$DATA_DIR/test_cases.json" \
+  --output-dir "$RESULTS_DIR"
 
-## 项目结构
-
-```
-.
-├── SKILL.md              # 技能定义文件
-├── scripts/
-│   ├── page_explorer.py  # 页面探索辅助
-│   ├── test_runner.py     # 测试执行器 + 报告生成
-│   ├── parse_cases.py     # 测试用例解析
-│   ├── convert_to_pdf.py  # Markdown → PDF
-│   └── convert_to_docx.py # Markdown → Word
-└── screenshots/          # 失败截图保存目录
+# 6. 生成报告
+python3 scripts/report_generator.py \
+  --test-results "$RESULTS_DIR/test_results.json" \
+  --business-doc "$DATA_DIR/business_logic.md" \
+  --output "./test_report.md"
 ```
 
 ## 测试用例格式
 
-### CSV 格式
-
-```csv
-name,type,selector,value,expected
-测试登录-正确账号,login,input[name=username],admin,登录成功
-测试搜索功能,form_submit,input[name=q],keyword,显示结果
-```
-
 ### JSON 格式
 
 ```json
-[
-  {
-    "name": "测试登录-正确账号",
-    "type": "login",
-    "selector": "input[name=username]",
-    "value": "admin",
-    "expected": "登录成功"
-  }
-]
+{
+  "id": "FLOW_001",
+  "name": "用户登录 - 主流程测试",
+  "type": "business_flow",
+  "category": "positive",
+  "description": "验证用户登录主流程可以正常完成",
+  "url": "https://example.com/login",
+  "expected": "登录成功",
+  "priority": "high",
+  "steps": ["访问登录页面", "输入用户名", "输入密码", "点击登录"],
+  "source_flow": "用户登录"
+}
 ```
 
-### Excel 格式
+### CSV 格式
 
-第一行为表头，支持字段：`name`, `type`, `selector`, `value`, `expected`, `wait_ms`。
+```csv
+id,name,type,url,selector,value,expected,priority
+TC001,首页访问,navigation,https://example.com,,,200,high
+TC002,搜索功能,element_check,https://example.com,input[name=q],,搜索按钮,medium
+```
+
+## 测试类型
+
+| 类型 | 说明 |
+|------|------|
+| `business_flow` | 业务流程测试（端到端）|
+| `navigation` | 页面导航测试 |
+| `element_check` | 元素存在性测试 |
+| `api_check` | API 接口测试 |
+| `form_submit` | 表单提交测试 |
+
+## 输出文件结构
+
+```
+test_data/
+├── page_tree.json          # 页面树结构
+├── pages/
+│   ├── index.html          # 页面 HTML
+│   ├── index_meta.json     # 页面元数据
+│   └── ...
+├── apis/
+│   └── api_records.json    # API 记录
+├── page_analysis.json      # 页面功能分析
+├── business_logic.md       # 业务逻辑文档
+└── test_cases.json         # 生成的测试用例
+
+test_results/
+├── test_results.json       # 测试结果
+├── screenshots/            # 失败截图
+└── final_report.md         # 测试报告
+```
 
 ## 报告内容
 
-- ✅ 测试用例通过/失败状态
-- 📸 失败时的页面截图
-- ⏱️ 每个操作的响应时间
-- 🐛 Bug 描述（期望行为 vs 实际行为）
-- 📊 测试概览：总数、通过数、失败数、通过率
+- 📊 执行摘要（通过率、状态评估）
+- 🔄 业务流程测试结果
+- 📋 按测试类型分类的详细结果
+- ❌ 失败详情与 Bug 描述
+- 💡 改进建议
 
-## 工作流程
+## 详细文档
 
-1. **接收需求** - 获取目标 URL、账号密码、测试用例文件
-2. **页面探索** - 打开页面、获取结构、识别可测试元素
-3. **确认计划** - 与用户确认测试范围和报告格式
-4. **执行测试** - 按测试类型执行并记录结果
-5. **生成报告** - 输出指定格式的测试报告
+详见 [SKILL.md](SKILL.md) 了解完整的技能使用指南。
