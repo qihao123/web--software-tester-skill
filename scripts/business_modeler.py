@@ -1,571 +1,596 @@
 #!/usr/bin/env python3
 """
-business_modeler.py - 业务建模器
+business_modeler.py - 业务逻辑建模器
 
-基于 crawler 和 page_analyzer 的数据，生成业务逻辑文档。
+基于采集的页面数据和 API 记录，生成业务逻辑文档。
+识别业务实体、业务规则和业务流程。
 
 用法:
-  python business_modeler.py --input-dir DIR [--output FILE]
-
-输入:
-  input_dir/page_tree.json
-  input_dir/apis/api_records.json
-  input_dir/page_analysis.json
-
-输出:
-  business_logic.md - 业务逻辑文档
+  python business_modeler.py --input-dir DATA_DIR --output OUTPUT_PATH
 """
 
 import sys
 import json
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional
 from datetime import datetime
+from typing import Dict, List
 
 
 class BusinessModeler:
-    """业务建模器"""
+    def __init__(self):
+        self.business_entities = []
+        self.business_flows = []
+        self.business_rules = []
+        self.api_business_mapping = {}
 
-    def __init__(self, input_dir: str):
-        self.input_dir = Path(input_dir)
-        self.page_tree_file = self.input_dir / "page_tree.json"
-        self.api_records_file = self.input_dir / "apis" / "api_records.json"
-        self.page_analysis_file = self.input_dir / "page_analysis.json"
+    def model(self, input_dir: str) -> dict:
+        """执行业务建模"""
+        data_dir = Path(input_dir)
 
-        self.page_tree: Dict = {}
-        self.api_records: List[dict] = []
-        self.page_analysis: Dict = {}
+        page_analysis_path = data_dir / "page_analysis.json"
+        api_records_path = data_dir / "apis" / "api_records.json"
+        page_tree_path = data_dir / "page_tree.json"
 
-        # 业务模型数据
-        self.business_entities: List[dict] = []
-        self.business_flows: List[dict] = []
-        self.page_to_function: Dict[str, List[str]] = {}
-        self.api_to_function: Dict[str, List[str]] = {}
+        page_analysis = None
+        api_records = []
+        page_tree = None
 
-    def load_data(self):
-        """加载所有输入数据"""
-        # 加载页面树
-        if self.page_tree_file.exists():
-            with open(self.page_tree_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                self.page_tree = data.get("pages", {})
-                self.base_url = data.get("base_url", "")
-            print(f"📁 加载页面树: {len(self.page_tree)} 个页面")
-        else:
-            print(f"⚠️ 页面树文件不存在: {self.page_tree_file}")
+        if page_analysis_path.exists():
+            with open(page_analysis_path, "r", encoding="utf-8") as f:
+                page_analysis = json.load(f)
 
-        # 加载 API 记录
-        if self.api_records_file.exists():
-            with open(self.api_records_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                self.api_records = data.get("api_records", [])
-            print(f"📁 加载 API 记录: {len(self.api_records)} 个 API")
-        else:
-            print(f"⚠️ API 记录文件不存在: {self.api_records_file}")
+        if api_records_path.exists():
+            with open(api_records_path, "r", encoding="utf-8") as f:
+                api_records = json.load(f)
 
-        # 加载页面分析
-        if self.page_analysis_file.exists():
-            with open(self.page_analysis_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                self.page_analysis = data.get("pages", {})
-            print(f"📁 加载页面分析: {len(self.page_analysis)} 个页面")
-        else:
-            print(f"⚠️ 页面分析文件不存在: {self.page_analysis_file}")
+        if page_tree_path.exists():
+            with open(page_tree_path, "r", encoding="utf-8") as f:
+                page_tree = json.load(f)
 
-    def _identify_business_entities(self):
-        """识别业务实体"""
-        entities = []
+        if not page_analysis and not api_records:
+            print("⚠️ 未找到足够的分析数据，将基于基础结构生成模板")
+            return self._generate_template_model(data_dir)
 
-        # 从 API 端点推断业务实体
-        for api in self.api_records:
-            url = api.get("url", "")
-            path = url.split("?")[0]  # 去掉查询参数
+        print("\n🏢 开始业务建模...")
 
-            # 提取可能的实体名（如 /api/users -> User）
-            parts = [p for p in path.split("/") if p and not p.startswith("{")]
-            if parts:
-                # 常见的实体名模式
-                entity_candidates = [p for p in parts if p not in ["api", "v1", "v2", "rest", "graphql"]]
-                for candidate in entity_candidates:
-                    entity_name = candidate.rstrip("s").title()  # users -> User
-                    if not any(e["name"] == entity_name for e in entities):
-                        entities.append({
-                            "name": entity_name,
-                            "plural": candidate if candidate.endswith("s") else candidate + "s",
-                            "source_api": url,
-                            "operations": self._infer_operations(path)
-                        })
+        entities = self._extract_entities(page_analysis, api_records)
+        flows = self._build_business_flows(page_analysis, api_records)
+        rules = self._infer_business_rules(page_analysis, api_records)
+        api_mapping = self._map_apis_to_business(api_records, entities)
 
-        # 从页面分析中的数据实体推断
-        for url, analysis in self.page_analysis.items():
-            data_entities = analysis.get("features", {}).get("data_entities", [])
-            for de in data_entities:
-                if de.get("type") == "table":
-                    columns = de.get("columns", [])
-                    entity_name = self._infer_entity_name_from_columns(columns)
-                    if entity_name and not any(e["name"] == entity_name for e in entities):
-                        entities.append({
-                            "name": entity_name,
-                            "source_page": url,
-                            "attributes": columns
-                        })
-
-        # 从表单字段推断
-        form_entities = self._extract_entities_from_forms()
-        for fe in form_entities:
-            if not any(e["name"] == fe["name"] for e in entities):
-                entities.append(fe)
-
-        self.business_entities = entities
-        print(f"  🎯 识别业务实体: {len(entities)} 个")
-
-    def _infer_operations(self, path: str) -> List[str]:
-        """从 API 路径推断操作类型"""
-        operations = []
-        lower_path = path.lower()
-
-        # RESTful 模式
-        if "/create" in lower_path or "/add" in lower_path:
-            operations.append("CREATE")
-        elif "/update" in lower_path or "/edit" in lower_path:
-            operations.append("UPDATE")
-        elif "/delete" in lower_path or "/remove" in lower_path:
-            operations.append("DELETE")
-        elif "/list" in lower_path or "/all" in lower_path:
-            operations.append("LIST")
-        elif "/get" in lower_path or "/detail" in lower_path or "/{id}" in lower_path:
-            operations.append("READ")
-
-        # HTTP 方法推断
-        for api in self.api_records:
-            if path in api.get("url", ""):
-                method = api.get("method", "GET")
-                if method == "GET":
-                    if not operations:
-                        operations.append("READ")
-                elif method == "POST":
-                    if "CREATE" not in operations:
-                        operations.append("CREATE")
-                elif method == "PUT" or method == "PATCH":
-                    if "UPDATE" not in operations:
-                        operations.append("UPDATE")
-                elif method == "DELETE":
-                    if "DELETE" not in operations:
-                        operations.append("DELETE")
-
-        return operations if operations else ["UNKNOWN"]
-
-    def _infer_entity_name_from_columns(self, columns: List[str]) -> Optional[str]:
-        """从列名推断实体名"""
-        # 常见的实体列名模式
-        common_patterns = {
-            "User": ["username", "email", "password", "user_id"],
-            "Product": ["product_name", "price", "sku", "stock"],
-            "Order": ["order_id", "total", "status", "order_date"],
-            "Article": ["title", "content", "author", "published_at"],
-            "Comment": ["comment", "author", "post_id"],
+        model = {
+            "model_time": datetime.now().isoformat(),
+            "source_data": {
+                "pages_analyzed": len(page_analysis.get("pages", [])) if page_analysis else 0,
+                "apis_captured": len(api_records),
+                "spa_detected": page_tree.get("is_spa", False) if page_tree else False
+            },
+            "business_entities": entities,
+            "business_flows": flows,
+            "business_rules": rules,
+            "api_business_mapping": api_mapping,
+            "test_recommendations": self._generate_test_recommendations(entities, flows, rules)
         }
 
-        col_lower = [c.lower() for c in columns]
+        return model
 
-        for entity, patterns in common_patterns.items():
-            matches = sum(1 for p in patterns if any(p in c for c in col_lower))
-            if matches >= 2:
-                return entity
+    def _generate_template_model(self, data_dir: dict) -> dict:
+        """当没有足够数据时生成模板模型"""
+        return {
+            "model_time": datetime.now().isoformat(),
+            "source_data": {"note": "基于目录结构生成的模板"},
+            "business_entities": [],
+            "business_flows": [],
+            "business_rules": [],
+            "api_business_mapping": {},
+            "test_recommendations": [],
+            "note": "请先运行 crawler.py 和 page_analyzer.py 以获取完整数据"
+        }
 
-        return None
-
-    def _extract_entities_from_forms(self) -> List[dict]:
-        """从表单中提取实体"""
+    def _extract_entities(self, page_analysis: dict, api_records: list) -> list:
+        """提取业务实体"""
         entities = []
+        entity_names = set()
 
-        for url, analysis in self.page_analysis.items():
-            forms = analysis.get("features", {}).get("forms", [])
-            for form in forms:
-                purpose = form.get("purpose", "")
-                fields = form.get("fields", [])
+        if page_analysis:
+            for page in page_analysis.get("pages", []):
+                page_name = page.get("name", "")
+                page_title = page.get("title", "")
 
-                if purpose == "login":
-                    if not any(e["name"] == "User" for e in entities):
-                        entities.append({
-                            "name": "User",
-                            "source": "login_form",
-                            "attributes": ["username", "password"]
-                        })
-                elif purpose == "registration":
-                    if not any(e["name"] == "User" for e in entities):
-                        entities.append({
-                            "name": "User",
-                            "source": "registration_form",
-                            "attributes": [f.get("name", "") for f in fields if f.get("name")]
-                        })
+                entity_candidates = self._extract_entity_from_name(page_name, page_title)
+                for candidate in entity_candidates:
+                    if candidate["name"] not in entity_names:
+                        entity_names.add(candidate["name"])
+                        entities.append(candidate)
+
+                        candidate["related_pages"] = [page.get("name")]
+                        candidate["fields"] = page.get("form_fields", [])
+                        candidate["operations"] = self._guess_operations(page)
+
+        if api_records:
+            for api in api_records:
+                api_path = api.get("path", "")
+                entity_from_api = self._extract_entity_from_api_path(api_path)
+
+                if entity_from_api and entity_from_api["name"] not in entity_names:
+                    entity_names.add(entity_from_api["name"])
+                    entities.append(entity_from_api)
 
         return entities
 
-    def _identify_business_flows(self):
-        """识别业务流程"""
-        flows = []
+    def _extract_entity_from_name(self, name: str, title: str) -> list:
+        """从页面名称中提取实体"""
+        candidates = []
+        combined = f"{name} {title}".strip()
 
-        # 从页面类型识别流程
-        login_pages = [url for url, a in self.page_analysis.items()
-                      if a.get("primary_type") == "login_page"]
-        register_pages = [url for url, a in self.page_analysis.items()
-                         if a.get("primary_type") == "register_page"]
-        search_pages = [url for url, a in self.page_analysis.items()
-                       if a.get("primary_type") == "search_page"]
-        list_pages = [url for url, a in self.page_analysis.items()
-                     if a.get("primary_type") == "list_page"]
-        form_pages = [url for url, a in self.page_analysis.items()
-                     if a.get("primary_type") == "form_page"]
+        common_entities = [
+            ("用户", ["user", "用户", "账户", "account"]),
+            ("商品", ["product", "goods", "商品", "产品"]),
+            ("订单", ["order", "订单"]),
+            ("角色", ["role", "角色"]),
+            ("权限", ["permission", "权限"]),
+            ("菜单", ["menu", "菜单"]),
+            ("日志", ["log", "日志"]),
+            ("配置", ["config", "配置", "设置"]),
+            ("部门", ["dept", "department", "部门"]),
+            ("任务", ["task", "任务"]),
+            ("消息", ["message", "消息", "通知"]),
+            ("文件", ["file", "文件"]),
+            ("字典", ["dict", "dictionary", "字典"]),
+        ]
 
-        # 登录流程
-        if login_pages:
-            flows.append({
-                "name": "用户登录",
-                "description": "用户通过登录页面进行身份验证",
-                "entry_page": login_pages[0],
-                "steps": [
-                    {"action": "访问登录页面", "page": login_pages[0]},
-                    {"action": "输入用户名/邮箱", "input": "username"},
-                    {"action": "输入密码", "input": "password"},
-                    {"action": "点击登录按钮"},
-                    {"action": "验证登录状态", "expected": "跳转到首页或仪表盘"}
-                ],
-                "involved_apis": self._find_related_apis(["login", "auth", "token", "signin"]),
-                "success_criteria": ["HTTP 200", "返回认证 token", "跳转到登录后页面"]
-            })
+        for entity_name, keywords in common_entities:
+            if any(kw in combined.lower() for kw in keywords):
+                candidates.append({
+                    "name": entity_name,
+                    "name_en": keywords[0],
+                    "source": "page_name",
+                    "confidence": "high" if entity_name in combined else "medium"
+                })
 
-        # 注册流程
-        if register_pages:
-            flows.append({
-                "name": "用户注册",
-                "description": "新用户创建账户",
-                "entry_page": register_pages[0],
-                "steps": [
-                    {"action": "访问注册页面", "page": register_pages[0]},
-                    {"action": "填写注册信息", "inputs": ["username", "email", "password"]},
-                    {"action": "提交注册表单"},
-                    {"action": "验证注册结果"}
-                ],
-                "involved_apis": self._find_related_apis(["register", "signup", "create"]),
-                "success_criteria": ["账户创建成功", "发送验证邮件"]
-            })
+        return candidates if candidates else [{
+            "name": name or "未命名实体",
+            "name_en": "",
+            "source": "page_name",
+            "confidence": "low"
+        }]
 
-        # 搜索流程
-        if search_pages:
-            flows.append({
-                "name": "内容搜索",
-                "description": "用户搜索系统中的内容",
-                "entry_page": search_pages[0],
-                "steps": [
-                    {"action": "访问搜索页面", "page": search_pages[0]},
-                    {"action": "输入搜索关键词"},
-                    {"action": "执行搜索"},
-                    {"action": "查看搜索结果"}
-                ],
-                "involved_apis": self._find_related_apis(["search", "query", "find"]),
-                "success_criteria": ["返回搜索结果列表", "结果包含关键词"]
-            })
+    def _extract_entity_from_api_path(self, api_path: str) -> dict:
+        """从 API 路径中提取实体"""
+        parts = api_path.strip("/").split("/")
+        if len(parts) >= 2:
+            entity_name = parts[-2] if parts[-1] in ["list", "detail", "create", "update", "delete", "page"] else parts[-1]
 
-        # 列表查看流程
-        if list_pages:
-            flows.append({
-                "name": "数据列表查看",
-                "description": "查看数据列表并浏览详情",
-                "entry_page": list_pages[0],
-                "steps": [
-                    {"action": "访问列表页面", "page": list_pages[0]},
-                    {"action": "加载列表数据"},
-                    {"action": "浏览列表项"},
-                    {"action": "点击某一项查看详情"}
-                ],
-                "involved_apis": self._find_related_apis(["list", "items", "get"]),
-                "success_criteria": ["列表数据加载成功", "支持分页"]
-            })
-
-        # 从页面分析中的用户流程提取
-        for url, analysis in self.page_analysis.items():
-            user_flows = analysis.get("features", {}).get("user_flows", [])
-            for flow in user_flows:
-                if not any(f["name"] == flow["name"] for f in flows):
-                    flows.append({
-                        "name": flow["name"],
-                        "entry_page": url,
-                        "steps": [{"action": step} for step in flow.get("steps", [])],
-                        "expected_outcome": flow.get("expected_outcome", "")
-                    })
-
-        # 表单提交流程
-        for url, analysis in self.page_analysis.items():
-            forms = analysis.get("features", {}).get("forms", [])
-            for form in forms:
-                if form.get("purpose") not in ["unknown", "search"]:
-                    flow_name = f"{form['purpose'].replace('_', ' ').title()}"
-                    if not any(f["name"] == flow_name for f in flows):
-                        flows.append({
-                            "name": flow_name,
-                            "description": f"Submit {form['purpose']} form",
-                            "entry_page": url,
-                            "steps": [
-                                {"action": "访问表单页面", "page": url},
-                                {"action": "填写表单字段", "fields": [f.get("name") for f in form.get("fields", [])]},
-                                {"action": "提交表单"},
-                                {"action": "验证提交结果"}
-                            ],
-                            "involved_apis": [form.get("action")] if form.get("action") else []
-                        })
-
-        self.business_flows = flows
-        print(f"  🔄 识别业务流程: {len(flows)} 个")
-
-    def _find_related_apis(self, keywords: List[str]) -> List[str]:
-        """根据关键词查找相关 API"""
-        related = []
-        for api in self.api_records:
-            url = api.get("url", "").lower()
-            if any(kw in url for kw in keywords):
-                related.append(api.get("url"))
-        return related
-
-    def _map_pages_to_functions(self):
-        """映射页面到功能"""
-        for url, analysis in self.page_analysis.items():
-            ptype = analysis.get("primary_type", "unknown")
-            functions = []
-
-            type_to_function = {
-                "login_page": ["用户认证", "登录功能"],
-                "register_page": ["用户注册", "账户创建"],
-                "search_page": ["内容搜索", "信息检索"],
-                "list_page": ["数据展示", "列表浏览"],
-                "detail_page": ["详情查看", "信息展示"],
-                "form_page": ["数据录入", "表单提交"],
-                "dashboard": ["数据概览", "系统监控"],
-                "profile_page": ["个人中心", "信息管理"],
-                "cart_page": ["购物车管理"],
-                "checkout_page": ["订单结算", "支付处理"]
+            entity_map = {
+                "user": "用户", "users": "用户",
+                "product": "商品", "products": "商品",
+                "order": "订单", "orders": "订单",
+                "role": "角色", "roles": "角色",
+                "menu": "菜单", "menus": "菜单",
+                "log": "日志", "logs": "日志",
+                "dept": "部门", "dept": "部门",
+                "file": "文件", "files": "文件",
+                "dict": "字典", "dict": "字典",
             }
 
-            if ptype in type_to_function:
-                functions.extend(type_to_function[ptype])
+            display_name = entity_map.get(entity_name.lower(), entity_name)
+            return {
+                "name": display_name,
+                "name_en": entity_name,
+                "source": "api_path",
+                "api_path": api_path,
+                "confidence": "high"
+            }
 
-            # 从交互分析中添加功能
-            interactions = analysis.get("features", {}).get("interactions", [])
-            for inter in interactions:
-                if inter.get("type") == "search_submission":
-                    functions.append("搜索功能")
-                elif inter.get("type") == "login_submission":
-                    functions.append("登录功能")
-                elif inter.get("type") == "registration_submission":
-                    functions.append("注册功能")
+        return None
 
-            self.page_to_function[url] = functions
+    def _guess_operations(self, page: dict) -> list:
+        """根据页面类型推断操作"""
+        page_type = page.get("type", "")
+        actions = page.get("potential_actions", [])
 
-    def _map_apis_to_functions(self):
-        """映射 API 到功能"""
-        for api in self.api_records:
-            url = api.get("url", "")
-            functions = []
+        operation_map = {
+            "login": ["登录", "登出"],
+            "list": ["查询列表", "搜索", "分页", "排序", "批量操作"],
+            "form": ["创建", "编辑", "提交", "验证"],
+            "detail": ["查看详情", "导出", "打印"],
+            "dashboard": ["查看统计", "刷新数据"],
+            "settings": ["读取配置", "更新配置"]
+        }
 
-            # 从 URL 路径推断功能
-            path_parts = url.lower().split("/")
+        return operation_map.get(page_type, ["查看"])
 
-            if any(x in path_parts for x in ["auth", "login", "token", "signin"]):
-                functions.append("用户认证")
-            if any(x in path_parts for x in ["register", "signup"]):
-                functions.append("用户注册")
-            if any(x in path_parts for x in ["user", "users", "profile"]):
-                functions.append("用户管理")
-            if any(x in path_parts for x in ["search", "query", "find"]):
-                functions.append("搜索服务")
-            if any(x in path_parts for x in ["list", "items", "all"]):
-                functions.append("数据查询")
-            if any(x in path_parts for x in ["create", "add", "new"]):
-                functions.append("数据创建")
-            if any(x in path_parts for x in ["update", "edit"]):
-                functions.append("数据更新")
-            if any(x in path_parts for x in ["delete", "remove"]):
-                functions.append("数据删除")
+    def _build_business_flows(self, page_analysis: dict, api_records: list) -> list:
+        """构建业务流程"""
+        flows = []
 
-            self.api_to_function[url] = functions
+        standard_flows = [
+            {
+                "name": "用户认证流程",
+                "description": "用户登录系统的完整流程",
+                "trigger": "用户访问需要认证的页面",
+                "actors": ["用户", "系统"],
+                "preconditions": ["用户拥有有效账户"],
+                "steps": [
+                    {"step": 1, "action": "访问登录页面", "expected": "显示登录表单"},
+                    {"step": 2, "action": "输入用户名", "expected": "用户名字段填充"},
+                    {"step": 3, "action": "输入密码", "expected": "密码字段填充（加密显示）"},
+                    {"step": 4, "action": "点击登录按钮", "expected": "提交认证请求"},
+                    {"step": 5, "action": "等待响应", "expected": "成功则跳转到首页/仪表盘"}
+                ],
+                "postconditions": ["用户获得会话 Token", "跳转到系统主页"],
+                "priority": "critical",
+                "test_cases_needed": ["正确凭证登录", "错误密码", "空用户名", "账号锁定状态"]
+            },
+            {
+                "name": "数据 CRUD 流程",
+                "description": "通用数据的增删改查流程",
+                "trigger": "用户需要进行数据管理操作",
+                "actors": ["普通用户", "管理员"],
+                "preconditions": ["用户已登录", "用户具有相应权限"],
+                "steps": [
+                    {"step": 1, "action": "访问数据列表页", "expected": "显示数据表格"},
+                    {"step": 2, "action": "点击新增按钮", "expected": "打开新建表单"},
+                    {"step": 3, "action": "填写表单数据", "expected": "各字段正常输入"},
+                    {"step": 4, "action": "点击保存/提交", "expected": "数据保存成功提示"},
+                    {"step": 5, "action": "验证列表刷新", "expected": "新数据显示在列表中"},
+                    {"step": 6, "action": "点击编辑", "expected": "打开编辑表单（预填数据）"},
+                    {"step": 7, "action": "修改并保存", "expected": "修改成功"},
+                    {"step": 8, "action": "点击删除", "expected": "弹出确认对话框"},
+                    {"step": 9, "action": "确认删除", "expected": "数据从列表移除"}
+                ],
+                "postconditions": ["数据库记录变更", "操作日志记录"],
+                "priority": "high",
+                "test_cases_needed": ["正常增删改查", "重复提交", "并发操作", "权限校验"]
+            },
+            {
+                "name": "数据查询与筛选流程",
+                "description": "用户搜索和筛选数据的流程",
+                "trigger": "用户需要查找特定数据",
+                "actors": ["所有用户"],
+                "preconditions": ["存在可供查询的数据"],
+                "steps": [
+                    {"step": 1, "action": "访问列表页面", "expected": "显示全部数据或默认视图"},
+                    {"step": 2, "action": "输入搜索条件", "expected": "搜索框接受输入"},
+                    {"step": 3, "action": "触发搜索（回车/按钮）", "expected": "结果过滤显示"},
+                    {"step": 4, "action": "使用高级筛选", "expected": "多条件组合查询"},
+                    {"step": 5, "action": "重置筛选条件", "expected": "恢复默认视图"},
+                    {"step": 6, "action": "切换排序方式", "expected": "数据重新排列"},
+                    {"step": 7, "action": "翻页浏览", "expected": "分页导航正常工作"}
+                ],
+                "postconditions": ["显示符合条件的结果集"],
+                "priority": "high",
+                "test_cases_needed": ["模糊搜索", "精确匹配", "空结果", "特殊字符", "大数据量"]
+            },
+            {
+                "name": "权限控制流程",
+                "description": "基于角色的访问控制验证",
+                "trigger": "用户尝试访问受保护资源",
+                "actors": ["管理员", "普通用户", "访客"],
+                "preconditions": ["系统配置了角色和权限"],
+                "steps": [
+                    {"step": 1, "action": "以不同角色登录", "expected": "各自看到对应菜单"},
+                    {"step": 2, "action": "访问无权限页面", "expected": "拒绝访问或隐藏菜单"},
+                    {"step": 3, "action": "尝试越权操作", "expected": "后端拒绝请求"},
+                    {"step": 4, "action": "切换用户角色", "expected": "权限即时更新"}
+                ],
+                "postconditions": ["敏感操作被拦截", "审计日志记录"],
+                "priority": "critical",
+                "test_cases_needed": ["角色隔离", "越权访问", "权限继承", "动态授权"]
+            }
+        ]
 
-    def generate_document(self) -> str:
-        """生成业务逻辑文档"""
-        self.load_data()
-        self._identify_business_entities()
-        self._identify_business_flows()
-        self._map_pages_to_functions()
-        self._map_apis_to_functions()
+        flows.extend(standard_flows)
 
-        doc = []
+        if page_analysis:
+            detected_flows = page_analysis.get("interaction_flows", [])
+            for flow in detected_flows:
+                custom_flow = {
+                    "name": flow.get("name", "自定义流程"),
+                    "description": f"从页面交互中自动识别的流程",
+                    "trigger": "用户操作",
+                    "actors": ["用户"],
+                    "preconditions": ["用户已登录"],
+                    "steps": [
+                        {"step": i + 1, "action": step.get("action", ""), "expected": step.get("target", "")}
+                        for i, step in enumerate(flow.get("steps", []))
+                    ],
+                    "postconditions": ["操作完成"],
+                    "priority": "medium",
+                    "test_cases_needed": []
+                }
+                flows.append(custom_flow)
 
-        # 文档标题
-        doc.append(f"# 业务逻辑文档")
-        doc.append(f"")
-        doc.append(f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        doc.append(f"**目标网站**: {self.base_url}")
-        doc.append(f"**分析页面数**: {len(self.page_tree)}")
-        doc.append(f"**发现 API 数**: {len(self.api_records)}")
-        doc.append(f"")
+        return flows
 
-        # 执行摘要
-        doc.append(f"## 📋 执行摘要")
-        doc.append(f"")
-        doc.append(f"本系统是一个基于 Web 的应用程序，包含以下核心能力：")
-        doc.append(f"")
-        if self.business_flows:
-            doc.append(f"- **核心业务流**: {len(self.business_flows)} 个")
-        if self.business_entities:
-            doc.append(f"- **业务实体**: {len(self.business_entities)} 个")
-        doc.append(f"- **功能页面**: {len(self.page_tree)} 个")
-        doc.append(f"- **API 端点**: {len(self.api_records)} 个")
-        doc.append(f"")
+    def _infer_business_rules(self, page_analysis: dict, api_records: list) -> list:
+        """推断业务规则"""
+        rules = []
 
-        # 业务实体
-        if self.business_entities:
-            doc.append(f"## 🏗️ 业务实体")
-            doc.append(f"")
-            for entity in self.business_entities:
-                doc.append(f"### {entity['name']}")
-                if "attributes" in entity:
-                    doc.append(f"**属性**: {', '.join(entity['attributes'])}")
-                if "operations" in entity:
-                    doc.append(f"**操作**: {', '.join(entity['operations'])}")
-                if "source_api" in entity:
-                    doc.append(f"**数据来源**: `{entity['source_api']}`")
-                doc.append(f"")
+        common_rules = [
+            {
+                "rule_id": "BR001",
+                "name": "认证要求",
+                "description": "除公开页面外，所有页面都需要有效认证才能访问",
+                "type": "security",
+                "enforcement": "前端路由守卫 + 后端 Token 验证",
+                "test_method": "未登录状态下直接访问各页面，验证重定向到登录页"
+            },
+            {
+                "rule_id": "BR002",
+                "name": "输入验证",
+                "description": "所有用户输入必须经过服务端验证（不依赖前端验证）",
+                "type": "validation",
+                "enforcement": "后端 DTO 校验 + 参数校验",
+                "test_method": "发送非法参数的请求，验证返回适当的错误码和信息"
+            },
+            {
+                "rule_id": "BR003",
+                "name": "数据权限隔离",
+                "description": "用户只能访问其权限范围内的数据",
+                "type": "authorization",
+                "enforcement": "后端数据权限过滤器",
+                "test_method": "用 A 用户登录后尝试访问 B 用户的数据"
+            },
+            {
+                "rule_id": "BR004",
+                "name": "操作幂等性",
+                "description": "重复提交相同请求不应产生副作用（如重复下单）",
+                "type": "consistency",
+                "enforcement": "唯一约束 / 幂等键",
+                "test_method": "快速连续点击提交按钮，验证只产生一条记录"
+            },
+            {
+                "rule_id": "BR005",
+                "name": "会话超时处理",
+                "description": "Token 过期后应自动跳转到登录页",
+                "type": "session",
+                "enforcement": "Token 有效期检查 + 拦截器",
+                "test_method": "等待 Token 过期后操作，验证提示重新登录"
+            },
+            {
+                "rule_id": "BR006",
+                "name": "数据完整性",
+                "description": "关联数据删除时应检查引用关系",
+                "type": "referential",
+                "enforcement": "外键约束 / 业务层校验",
+                "test_method": "尝试删除被其他记录引用的数据"
+            }
+        ]
 
-        # 业务流程
-        if self.business_flows:
-            doc.append(f"## 🔄 业务流程")
-            doc.append(f"")
-            for i, flow in enumerate(self.business_flows, 1):
-                doc.append(f"### {i}. {flow['name']}")
-                if "description" in flow:
-                    doc.append(f"**描述**: {flow['description']}")
-                if "entry_page" in flow:
-                    doc.append(f"**入口页面**: `{flow['entry_page']}`")
-                doc.append(f"")
+        if api_records:
+            api_methods = [api.get("method", "") for api in api_records]
+            if "POST" in api_methods or "PUT" in api_methods:
+                rules.append({
+                    "rule_id": "BR007",
+                    "name": "写操作审计",
+                    "description": "所有数据变更操作必须记录操作日志",
+                    "type": "audit",
+                    "enforcement": "AOP 切面 / 拦截器",
+                    "test_method": "执行增删改操作后检查日志表"
+                })
 
-                doc.append(f"**流程步骤**:")
-                for step in flow.get("steps", []):
-                    if isinstance(step, dict):
-                        action = step.get("action", "")
-                        if "page" in step:
-                            doc.append(f"1. {action} - [{step['page']}]")
-                        elif "input" in step:
-                            doc.append(f"1. {action} (`{step['input']}`)")
-                        elif "fields" in step:
-                            fields = ", ".join(step['fields'])
-                            doc.append(f"1. {action} ({fields})")
-                        else:
-                            doc.append(f"1. {action}")
-                    else:
-                        doc.append(f"1. {step}")
-                doc.append(f"")
+        rules.extend(common_rules)
+        return rules
 
-                if flow.get("involved_apis"):
-                    doc.append(f"**涉及 API**:")
-                    for api in flow["involved_apis"]:
-                        doc.append(f"- `{api}`")
-                    doc.append(f"")
+    def _map_apis_to_business(self, api_records: list, entities: list) -> dict:
+        """将 API 映射到业务实体"""
+        mapping = {}
 
-                if flow.get("success_criteria"):
-                    doc.append(f"**成功标准**:")
-                    for criteria in flow["success_criteria"]:
-                        doc.append(f"- {criteria}")
-                    doc.append(f"")
+        for api in api_records:
+            api_path = api.get("path", "")
+            method = api.get("method", "")
 
-                if flow.get("expected_outcome"):
-                    doc.append(f"**预期结果**: {flow['expected_outcome']}")
-                    doc.append(f"")
+            matched_entity = None
+            for entity in entities:
+                entity_en = entity.get("name_en", "").lower()
+                if entity_en and entity_en in api_path.lower():
+                    matched_entity = entity["name"]
+                    break
 
-        # 页面功能映射
-        if self.page_to_function:
-            doc.append(f"## 📄 页面功能映射")
-            doc.append(f"")
-            doc.append(f"| 页面 | 功能 |")
-            doc.append(f"|------|------|")
-            for url, functions in self.page_to_function.items():
-                func_str = ", ".join(functions) if functions else "-"
-                doc.append(f"| `{url}` | {func_str} |")
-            doc.append(f"")
+            if not matched_entity:
+                parts = api_path.strip("/").split("/")
+                if len(parts) >= 2:
+                    matched_entity = parts[-2].capitalize()
 
-        # API 功能映射
-        if self.api_to_function:
-            doc.append(f"## 🔌 API 功能映射")
-            doc.append(f"")
-            doc.append(f"| API | 功能 |")
-            doc.append(f"|-----|------|")
-            for url, functions in self.api_to_function.items():
-                func_str = ", ".join(functions) if functions else "数据接口"
-                doc.append(f"| `{url}` | {func_str} |")
-            doc.append(f"")
+            operation = self._infer_api_operation(method, api_path)
 
-        # 系统架构概览
-        doc.append(f"## 🏛️ 系统架构概览")
-        doc.append(f"")
-        doc.append(f"```")
-        doc.append(f"用户 -> Web 界面 -> 业务逻辑层 -> API 服务 -> 数据层")
-        doc.append(f"```")
-        doc.append(f"")
+            if matched_entity not in mapping:
+                mapping[matched_entity] = {"entity": matched_entity, "apis": []}
 
-        if self.business_flows:
-            doc.append(f"### 核心业务流程图")
-            doc.append(f"")
-            for flow in self.business_flows:
-                doc.append(f"**{flow['name']}**:")
-                steps = []
-                for step in flow.get("steps", []):
-                    if isinstance(step, dict):
-                        steps.append(step.get("action", ""))
-                    else:
-                        steps.append(step)
-                flow_str = " -> ".join(steps[:5])  # 只显示前5步
-                if len(flow.get("steps", [])) > 5:
-                    flow_str += " -> ..."
-                doc.append(f"```")
-                doc.append(f"{flow_str}")
-                doc.append(f"```")
-                doc.append(f"")
+            mapping[matched_entity]["apis"].append({
+                "method": method,
+                "path": api_path,
+                "operation": operation,
+                "description": f"{operation}{matched_entity}"
+            })
 
-        # 附录：原始数据
-        doc.append(f"## 📎 附录：原始数据汇总")
-        doc.append(f"")
-        doc.append(f"### 页面类型分布")
-        if self.page_analysis:
-            type_count = {}
-            for analysis in self.page_analysis.values():
-                ptype = analysis.get("primary_type", "unknown")
-                type_count[ptype] = type_count.get(ptype, 0) + 1
-            for ptype, count in sorted(type_count.items(), key=lambda x: x[1], reverse=True):
-                doc.append(f"- {ptype}: {count} 个")
-        doc.append(f"")
+        return mapping
 
-        return "\n".join(doc)
+    def _infer_api_operation(self, method: str, path: str) -> str:
+        """推断 API 操作类型"""
+        last_part = path.split("/")[-1].lower()
 
-    def save_document(self, output_file: str):
-        """保存业务逻辑文档"""
-        document = self.generate_document()
+        op_map = {
+            "GET": {
+                "list": "查询列表", "page": "分页查询", "detail": "查询详情",
+                "info": "查询信息", "get": "获取", "": "查询"
+            },
+            "POST": {
+                "create": "创建", "add": "新增", "save": "保存", "": "创建"
+            },
+            "PUT": {
+                "update": "更新", "edit": "编辑", "modify": "修改", "": "更新"
+            },
+            "DELETE": {
+                "delete": "删除", "remove": "移除", "": "删除"
+            }
+        }
 
-        output_path = Path(output_file)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        method_ops = op_map.get(method, {})
+        return method_ops.get(last_part, method_ops.get("", "操作"))
 
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(document)
+    def _generate_test_recommendations(self, entities: list, flows: list, rules: list) -> list:
+        """生成测试建议"""
+        recommendations = []
 
-        print(f"📁 业务逻辑文档已保存: {output_path}")
+        recommendations.append({
+            "category": "接口测试",
+            "priority": "P0",
+            "items": [
+                "对所有 API 进行正异常测试",
+                "测试参数边界值和特殊字符",
+                "验证接口鉴权和权限控制",
+                "测试接口性能和并发"
+            ]
+        })
+
+        recommendations.append({
+            "category": "功能测试",
+            "priority": "P0",
+            "items": [
+                "覆盖所有业务流程的主流程和分支流程",
+                "测试表单验证（必填、格式、长度限制）",
+                "验证搜索、筛选、排序、分页功能",
+                "测试数据的增删改查完整闭环"
+            ]
+        })
+
+        recommendations.append({
+            "category": "安全测试",
+            "priority": "P1",
+            "items": [
+                "SQL 注入测试",
+                "XSS 攻击测试",
+                "CSRF 防护验证",
+                "越权访问测试"
+            ]
+        })
+
+        if len(entities) > 5:
+            recommendations.append({
+                "category": "性能测试",
+                "priority": "P1",
+                "items": [
+                    "页面加载时间测试",
+                    "大数据量下的列表渲染性能",
+                    "并发用户操作测试",
+                    "接口响应时间基准测试"
+                ]
+            })
+
+        return recommendations
+
+    def generate_markdown_report(self, model: dict) -> str:
+        """生成 Markdown 格式的业务逻辑文档"""
+        lines = []
+        lines.append("# 业务逻辑文档")
+        lines.append("")
+        lines.append(f"> 生成时间: {model.get('model_time', '')}")
+        lines.append("")
+
+        lines.append("## 1. 业务实体")
+        lines.append("")
+        entities = model.get("business_entities", [])
+        if entities:
+            lines.append("| 实体名称 | 英文名 | 来源 | 置信度 |")
+            lines.append("|---------|--------|------|--------|")
+            for ent in entities:
+                lines.append(f"| {ent.get('name', '-')} | {ent.get('name_en', '-')} | "
+                           f"{ent.get('source', '-')} | {ent.get('confidence', '-')} |")
+        else:
+            lines.append("*暂无实体数据*")
+        lines.append("")
+
+        lines.append("## 2. 业务流程")
+        lines.append("")
+        flows = model.get("business_flows", [])
+        for i, flow in enumerate(flows, 1):
+            lines.append(f"### 2.{i} {flow.get('name', '未命名流程')}")
+            lines.append("")
+            lines.append(f"**描述**: {flow.get('description', '')}")
+            lines.append(f"**优先级**: {flow.get('priority', '-')}")
+            lines.append("")
+            lines.append("**步骤**:")
+            lines.append("")
+            lines.append("| 步骤 | 操作 | 预期结果 |")
+            lines.append("|------|------|----------|")
+            for step in flow.get("steps", []):
+                lines.append(f"| {step.get('step')} | {step.get('action', '')} | {step.get('expected', '')} |")
+            lines.append("")
+
+            test_cases = flow.get("test_cases_needed", [])
+            if test_cases:
+                lines.append("**建议测试场景**:")
+                lines.append("")
+                for tc in test_cases:
+                    lines.append(f"- {tc}")
+                lines.append("")
+
+        lines.append("## 3. 业务规则")
+        lines.append("")
+        rules = model.get("business_rules", [])
+        for rule in rules:
+            lines.append(f"### **{rule.get('rule_id')}**: {rule.get('name', '')}")
+            lines.append("")
+            lines.append(f"- **描述**: {rule.get('description', '')}")
+            lines.append(f"- **类型**: {rule.get('type', '')}")
+            lines.append(f"- **测试方法**: {rule.get('test_method', '')}")
+            lines.append("")
+
+        lines.append("## 4. API 与业务映射")
+        lines.append("")
+        api_mapping = model.get("api_business_mapping", {})
+        if api_mapping:
+            for entity_name, info in api_mapping.items():
+                lines.append(f"### {entity_name}")
+                lines.append("")
+                for api in info.get("apis", []):
+                    lines.append(f"- `{api.get('method')}` `{api.get('path')}` - {api.get('description', '')}")
+                lines.append("")
+        else:
+            lines.append("*暂无 API 映射数据*")
+            lines.append("")
+
+        lines.append("## 5. 测试建议")
+        lines.append("")
+        recommendations = model.get("test_recommendations", [])
+        for rec in recommendations:
+            lines.append(f"### {rec.get('category', '')} ({rec.get('priority', '')})")
+            lines.append("")
+            for item in rec.get("items", []):
+                lines.append(f"- [ ] {item}")
+            lines.append("")
+
+        return "\n".join(lines)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="业务建模器 - 生成业务逻辑文档")
-    parser.add_argument("--input-dir", "-i", required=True, help="crawler 输出目录")
-    parser.add_argument("--output", "-o", default="./test_data/business_logic.md", help="输出文件路径")
+    parser = argparse.ArgumentParser(description="业务逻辑建模器")
+    parser.add_argument("--input-dir", "-i", required=True, help="输入目录")
+    parser.add_argument("--output", "-o", default=None, help="输出 Markdown 路径")
+    parser.add_argument("--json-output", default=None, help="输出 JSON 路径")
     args = parser.parse_args()
 
-    modeler = BusinessModeler(args.input_dir)
-    modeler.save_document(args.output)
+    modeler = BusinessModeler()
+    model = modeler.model(args.input_dir)
+
+    md_output = args.output or f"{args.input_dir}/business_logic.md"
+    json_output = args.json_output or f"{args.input_dir}/business_model.json"
+
+    md_content = modeler.generate_markdown_report(model)
+    Path(md_output).write_text(md_content, encoding="utf-8")
+
+    with open(json_output, "w", encoding="utf-8") as f:
+        json.dump(model, f, ensure_ascii=False, indent=2)
+
+    print(f"\n✅ 业务建模完成!")
+    print(f"   Markdown 报告: {md_output}")
+    print(f"   JSON 数据: {json_output}")
+    print(f"\n   业务实体: {len(model.get('business_entities', []))}")
+    print(f"   业务流程: {len(model.get('business_flows', []))}")
+    print(f"   业务规则: {len(model.get('business_rules', []))}")
 
 
 if __name__ == "__main__":

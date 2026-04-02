@@ -1,287 +1,170 @@
 ---
 name: web-software-tester
-description: Web 业务驱动测试技能。支持自动爬取网站构建页面树、分析页面功能、保存 HTML 和 API 数据、进行业务建模、生成业务逻辑文档、基于业务逻辑自动生成测试用例并执行，最终输出基于业务的测试报告。触发场景：用户要求测试网站/网页、进行业务流程测试、生成业务测试报告、理解网站业务逻辑、进行回归测试。
+description: Web 业务驱动测试技能。支持自动爬取网站（含 SPA/Hash 路由）、从 Swagger 获取 API 文档、分析业务逻辑、生成专业测试文档（流程/接口/用例/计划）并执行接口和功能测试。触发场景：用户要求测试网站/网页、对页面进行自动化测试、生成测试报告、运行回归测试、验证表单/登录/按钮等功能、获取 API 接口文档。
 ---
 
-# Web 软件测试技能（业务驱动）
+# Web 业务驱动测试技能
 
-本技能通过分析网站业务逻辑，自动生成并执行基于业务场景的测试用例。
-
-## 工作流程概览
+## 工作流程
 
 ```
-目标 URL → 爬取采集 → 页面分析 → 业务建模 → 生成用例 → 执行测试 → 生成报告
+目标 URL → Swagger/API 爬取 → 页面探索 → 业务建模 → 生成用例 → 执行测试 → 专业报告
 ```
 
-## 阶段说明
+### Step 1：接收测试需求
 
-### 阶段 1: 数据采集（crawler）
+用户通常会提供以下信息：
 
-爬取目标网站，构建页面树，保存 HTML 代码，嗅探 API 端点。
+- **目标 URL**：要测试的网页地址
+- **Swagger 地址**：API 文档地址（可选，如 /swagger-ui.html）
+- **用户名/密码**：用于登录测试（可选）
+- **Token**：认证令牌（可选）
+- **报告格式**：Markdown / PDF / Word（默认询问用户）
+
+### Step 2：获取 API 文档（新增）
+
+使用 `scripts/swagger_fetcher.py` 自动发现并抓取 Swagger/OpenAPI 接口文档：
 
 ```bash
-python3 scripts/crawler.py <URL> --output-dir ./test_data --max-depth 3
+python3 scripts/swagger_fetcher.py https://target.com --output-dir ./test_data --token TOKEN
 ```
 
-**输出：**
-- `page_tree.json` - 页面树结构（页面间关联关系）
-- `pages/*.html` - 各页面原始 HTML
-- `pages/*_meta.json` - 页面元数据（表单、按钮、链接等）
-- `apis/api_records.json` - API 调用记录（URL、方法、参数、响应样例）
+**特性**：
+- 自动探测常见 Swagger 路径（`/swagger-ui.html`, `/v2/api-docs`, `/doc.html` 等）
+- 支持 OpenAPI 2.0 / 3.0 规范解析
+- 生成本地 JSON + Markdown 双格式接口文档
+- 提取完整的参数定义、响应格式、数据模型
 
-**参数说明：**
-- `--max-depth N` - 最大爬取深度（默认 3）
-- `--delay SEC` - 请求间隔（默认 0.5 秒）
-- `--use-playwright` - 使用 Playwright 渲染动态页面（需要安装 playwright）
+### Step 3：网站爬取（支持 SPA）
 
-### 阶段 2: 页面功能分析（page_analyzer）
-
-分析采集的页面数据，识别页面类型和功能。
+使用 `scripts/crawler.py` 爬取目标网站：
 
 ```bash
+python3 scripts/crawler.py "https://target.com" \
+  --output-dir ./test_data \
+  --max-depth 2 \
+  --token TOKEN
+```
+
+**核心改进**：
+- ✅ **SPA 检测**：自动识别 Vue/React/Angular 应用
+- ✅ **Hash 路由**：正确处理 `/#/home` 格式的 SPA 路由
+- ✅ **API 拦截**：通过 Playwright 网络拦截提取真实 API 路径（不再靠猜）
+- ✅ **Token 注入时机**：使用 `add_init_script()` 在页面加载前注入（解决 Vue domContentLoaded 时序问题）
+- ✅ **智能等待**：异步等待页面渲染完成，替代硬编码 `sleep(2)`
+
+### Step 4：业务分析与建模
+
+```bash
+# 页面功能分析
 python3 scripts/page_analyzer.py --input-dir ./test_data --output ./test_data/page_analysis.json
-```
 
-**分析内容：**
-- 页面类型检测（登录页、注册页、搜索页、列表页等）
-- 表单功能分析（登录、注册、搜索、提交等）
-- 用户交互流程识别
-- 数据实体提取
-
-**输出：**
-- `page_analysis.json` - 各页面的详细功能分析
-
-### 阶段 3: 业务建模（business_modeler）
-
-基于采集数据生成业务逻辑文档。
-
-```bash
+# 业务逻辑建模
 python3 scripts/business_modeler.py --input-dir ./test_data --output ./test_data/business_logic.md
 ```
 
-**生成内容：**
-- 业务实体定义（用户、订单、商品等）
-- 业务流程描述（登录流程、注册流程、下单流程等）
-- 页面与功能映射
-- API 与功能映射
+**输出内容**：
+- 📊 页面类型识别（列表页/表单页/登录页等）
+- 🔗 交互流程检测
+- 🏢 **业务实体提取**（从页面名 + API 路径）
+- 📋 **标准业务流程模板**（登录/CRUD/查询/权限）
+- 📐 **业务规则推断**（认证/输入校验/幂等性/审计等）
+- 🔄 API 与业务实体的映射关系
 
-**输出：**
-- `business_logic.md` - Markdown 格式业务逻辑文档
-
-### 阶段 4: 测试用例生成（test_generator）
-
-基于业务逻辑自动生成测试用例。
+### Step 5：生成专业测试文档
 
 ```bash
 python3 scripts/test_generator.py \
   --business-doc ./test_data/business_logic.md \
+  --api-doc ./test_data/apis/swagger_docs.json \
   --page-analysis ./test_data/page_analysis.json \
   --output ./test_data/test_cases.json
 ```
 
-**生成用例类型：**
-- 业务流程测试（主流程 + 异常分支）
-- 页面功能测试（导航、元素存在性）
-- API 接口测试（可访问性、响应验证）
-- 跨页面端到端测试
+**生成的文档包含**：
+| 文档类型 | 内容 |
+|----------|------|
+| 测试计划 | 目标/范围/策略/环境/进度安排/准出标准/风险评估 |
+| 测试用例 | 业务流程用例 + API 接口用例 + UI 元素用例 + 安全测试用例 |
+| 接口文档 | 基于 Swagger 的完整 API 说明（含参数/响应/示例） |
+| 流程文档 | 标准化的业务流程步骤和预期结果 |
 
-**输出：**
-- `test_cases.json` - 机器可读测试用例
-- `test_cases.csv` - 人工可读测试用例（表格格式）
+### Step 6：执行测试
 
-### 阶段 5: 测试执行（test_runner）
-
-执行生成的测试用例。
+#### 6.1 功能/UI 测试
 
 ```bash
 python3 scripts/test_runner.py \
-  --config '{"url": "<目标URL>"}' \
   --cases ./test_data/test_cases.json \
+  --config '{"url": "https://target.com"}' \
   --output-dir ./test_results
 ```
 
-**测试模式：**
-- **静态模式**（默认）：使用 requests + BeautifulSoup，速度快，适合静态页面
-- **Playwright 模式**（加 `--use-playwright`）：真实浏览器，支持 JS 交互和截图
+#### 6.2 API 接口测试（新增）
 
-**输出：**
-- `test_results.json` - 详细测试结果
-- `screenshots/*.png` - 失败截图（Playwright 模式）
+```bash
+python3 scripts/api_tester.py \
+  --apis ./test_data/apis/swagger_docs.json \
+  --base-url "https://target.com" \
+  --token TOKEN \
+  --output-dir ./test_results
+```
 
-### 阶段 6: 报告生成（report_generator）
+**特性**：
+- 异步并发执行（aiohttp）
+- 正常请求 / 未认证 / 非法参数 多场景覆盖
+- 响应时间统计（平均/最大/最小）
+- 按 HTTP 方法分类汇总
 
-生成基于业务的测试报告。
+### Step 7：生成专业报告
 
 ```bash
 python3 scripts/report_generator.py \
   --test-results ./test_results/test_results.json \
   --business-doc ./test_data/business_logic.md \
-  --format markdown \
-  --output ./test_report.md
+  --output-dir ./test_results
 ```
 
-**报告内容：**
-- 执行摘要（通过率、状态评估）
-- 业务流程测试结果（按流程分组）
-- 按测试类型分类的详细结果
-- 失败详情与 Bug 描述
-- 改进建议
-
-**输出格式：**
-- Markdown（默认）
-- HTML（加 `--format html`）
-
-### 格式转换（可选）
-
-将 Markdown 报告转换为 PDF 或 Word：
-
-```bash
-# 转 PDF（需要 weasyprint 或生成可打印 HTML）
-python3 scripts/convert_to_pdf.py ./test_report.md -o ./test_report
-
-# 转 Word（需要 python-docx）
-python3 scripts/convert_to_docx.py ./test_report.md -o ./test_report.docx
-```
-
-## 完整端到端流程
-
-一次性执行完整测试流程：
-
-```bash
-# 1. 设置变量
-URL="https://example.com"
-DATA_DIR="./test_data"
-RESULTS_DIR="./test_results"
-
-# 2. 爬取网站
-python3 scripts/crawler.py "$URL" --output-dir "$DATA_DIR" --max-depth 2
-
-# 3. 分析页面
-python3 scripts/page_analyzer.py --input-dir "$DATA_DIR" --output "$DATA_DIR/page_analysis.json"
-
-# 4. 业务建模
-python3 scripts/business_modeler.py --input-dir "$DATA_DIR" --output "$DATA_DIR/business_logic.md"
-
-# 5. 生成测试用例
-python3 scripts/test_generator.py \
-  --business-doc "$DATA_DIR/business_logic.md" \
-  --page-analysis "$DATA_DIR/page_analysis.json" \
-  --output "$DATA_DIR/test_cases.json"
-
-# 6. 执行测试
-python3 scripts/test_runner.py \
-  --config "{\"url\": \"$URL\"}" \
-  --cases "$DATA_DIR/test_cases.json" \
-  --output-dir "$RESULTS_DIR"
-
-# 7. 生成报告
-python3 scripts/report_generator.py \
-  --test-results "$RESULTS_DIR/test_results.json" \
-  --business-doc "$DATA_DIR/business_logic.md" \
-  --output "./test_report.md"
-
-echo "✅ 测试完成！报告: ./test_report.md"
-```
-
-## 测试用例字段说明
-
-生成的测试用例 JSON 结构：
-
-```json
-{
-  "id": "FLOW_001",
-  "name": "用户登录 - 主流程测试",
-  "type": "business_flow",
-  "category": "positive",
-  "description": "验证用户登录主流程可以正常完成",
-  "url": "https://example.com/login",
-  "selector": "",
-  "value": "",
-  "expected": "登录成功",
-  "priority": "high",
-  "steps": ["访问登录页面", "输入用户名", "输入密码", "点击登录"],
-  "source_flow": "用户登录"
-}
-```
-
-**字段说明：**
-
-| 字段 | 说明 |
+**输出文档**：
+| 报告 | 说明 |
 |------|------|
-| `id` | 唯一标识 |
-| `name` | 测试用例名称 |
-| `type` | 测试类型：business_flow, navigation, element_check, api_check, form_submit |
-| `category` | 测试分类：positive（正向）, negative（异常） |
-| `description` | 测试描述 |
-| `url` | 目标页面 URL |
-| `selector` | 元素选择器（用于 element_check） |
-| `value` | 输入值或 API 端点 |
-| `expected` | 期望结果 |
-| `priority` | 优先级：high, medium, low |
-| `steps` | 测试步骤列表（用于 business_flow） |
-| `source_flow` | 所属业务流程 |
+| `execution_report.md` | 执行摘要 + 结果明细 + 缺陷汇总 + 改进建议 |
+| `test_plan.md` | 完整测试计划（目标/范围/策略/进度/准出标准/风险） |
+| `api_documentation.md` | 接口测试结果详情 |
+| `flow_documentation.md` | 业务流程测试参考 |
 
-## 依赖安装
+## 脚本说明
 
-```bash
-# 核心依赖
-pip install requests beautifulsoup4
+| 脚本 | 用途 | 核心改进 |
+|------|------|----------|
+| `crawler.py` | 网站爬取（Playwright） | SPA/Hash路由、API拦截、Token预注入 |
+| `page_analyzer.py` | 页面功能分析 | 类型识别、元素分类、流程推断 |
+| `business_modeler.py` | 业务逻辑建模 | 实体提取、流程模板、规则推断、完整 Markdown 输出 |
+| `test_generator.py` | 测试用例+计划生成 | 含安全测试用例、完整测试计划结构 |
+| `api_tester.py` | API 接口测试 | 异步并发、多场景覆盖、性能指标 |
+| `report_generator.py` | 专业报告生成 | 5 类专业文档、缺陷分级、改进建议 |
+| `swagger_fetcher.py` | Swagger 文档抓取 | 自动发现、OpenAPI 解析、本地化存储 |
+| `test_runner.py` | 功能测试执行器 | 支持多种测试类型 |
+| `convert_to_pdf.py` | PDF 生成 | Playwright 优先 > WeasyPrint > HTML Fallback |
+| `convert_to_docx.py` | Word 生成 | - |
+| `parse_cases.py` | 测试用例解析 | Excel/CSV/JSON |
 
-# 可选依赖（用于 Excel/Word 支持）
-pip install openpyxl python-docx
+## 已解决的问题
 
-# 可选依赖（用于真实浏览器测试）
-pip install playwright
-playwright install chromium
-
-# 可选依赖（用于 PDF 生成）
-pip install weasyprint
-```
+| # | 问题 | 解决方案 |
+|---|------|----------|
+| 1 | 不懂 SPA/Hash 路由 | 自动检测 SPA 应用，正确处理 Hash 和 History 路由模式 |
+| 2 | Token 注入时机错误 | 使用 `add_init_script()` 在页面加载前注入 |
+| 3 | API 路径靠猜 | Playwright 网络请求拦截，从真实流量提取 API |
+| 4 | 业务分析为空 | 完整实现 business_modeler，输出实体/流程/规则/映射 |
+| 5 | PDF 依赖 WeasyPrint | Playwright PDF 优先，跨平台兼容 |
+| 6 | 截图硬等待 | 异步智能等待 + 页面元素就绪检测 |
 
 ## 注意事项
 
-1. **爬取限制**
-   - 遵守网站的 robots.txt
-   - 合理设置爬取延迟（`--delay`）
-   - 限制爬取深度避免过度采集
-
-2. **动态页面**
-   - 静态模式无法执行 JavaScript
-   - 需要测试 JS 交互时请使用 `--use-playwright`
-   - Playwright 模式速度较慢但更真实
-
-3. **业务建模局限**
-   - 自动生成的业务逻辑文档是初版，建议人工审核
-   - 复杂业务逻辑可能需要手动补充
-   - 测试用例覆盖率取决于页面分析的完整性
-
-4. **测试执行**
-   - 静态模式下表单提交可能不完整（无法执行 JS 验证）
-   - 涉及登录态的测试需要先在配置中提供凭证
-   - API 测试可能受限于认证机制
-
-## 扩展功能
-
-### 使用外部测试用例
-
-除了自动生成的用例，也可以导入外部测试用例：
-
-```bash
-python3 scripts/test_runner.py --cases ./my_custom_cases.csv --output-dir ./test_results
-```
-
-CSV 格式：
-```csv
-id,name,type,url,selector,value,expected
-TC001,自定义测试,navigation,https://example.com,,,200
-TC002,元素检查,element_check,https://example.com,h1,,Welcome
-```
-
-### 手动补充业务逻辑
-
-自动生成的 `business_logic.md` 是初版，建议人工审核后补充：
-- 添加业务规则说明
-- 补充异常流程
-- 完善数据实体定义
-
-修改后的业务文档可以重新用于生成测试用例。
+- 内网/外网 URL 均可测试
+- SPA 应用会自动检测并适配路由模式
+- 截图保存在 `screenshots/` 目录
+- PDF 推荐 Playwright 方式：`pip install playwright && playwright install chromium`
+- Word 需要：`pip install python-docx`
+- Swagger 抓取需要网络访问目标系统的 API 文档端点

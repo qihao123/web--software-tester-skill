@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-report_generator.py - 业务测试报告生成器
+report_generator.py - 专业测试报告生成器
 
-基于测试结果和业务逻辑文档，生成基于业务视角的测试报告。
+生成专业测试工程师需要的文档:
+- 测试流程文档
+- 接口文档
+- 测试用例文档
+- 测试计划文档
+- 测试执行报告
 
 用法:
-  python report_generator.py --test-results RESULTS --business-doc DOC [--format FORMAT] [--output FILE]
-
-输出:
-  business_test_report.md (或 .html)
+  python report_generator.py --test-results RESULTS_JSON [--business-doc MD_PATH] [--output DIR]
 """
 
 import sys
@@ -16,457 +18,403 @@ import json
 import argparse
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional
 
 
 class ReportGenerator:
-    """业务测试报告生成器"""
+    def __init__(self, output_dir: str = "./test_results"):
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def __init__(self, test_results_path: str, business_doc_path: str):
-        self.test_results_path = Path(test_results_path)
-        self.business_doc_path = Path(business_doc_path)
+    def generate_all(self, test_results: dict, business_doc: str = None) -> dict:
+        """生成所有报告"""
+        print("\n📝 开始生成测试报告...")
 
-        self.test_results: Dict = {}
-        self.business_doc: str = ""
-        self.business_flows: List[str] = []
+        reports = {}
 
-    def load_data(self):
-        """加载数据"""
-        # 加载测试结果
-        if self.test_results_path.exists():
-            with open(self.test_results_path, "r", encoding="utf-8") as f:
-                self.test_results = json.load(f)
-            print(f"📁 加载测试结果: {self.test_results_path}")
-        else:
-            print(f"ERROR: 测试结果文件不存在: {self.test_results_path}")
-            sys.exit(1)
+        execution_report = self._generate_execution_report(test_results)
+        reports["execution_report"] = execution_report
 
-        # 加载业务逻辑文档
-        if self.business_doc_path.exists():
-            self.business_doc = self.business_doc_path.read_text(encoding="utf-8")
-            self._extract_business_flows()
-            print(f"📁 加载业务逻辑文档: {self.business_doc_path}")
-        else:
-            print(f"⚠️ 业务逻辑文档不存在: {self.business_doc_path}")
+        test_plan = self._generate_test_plan_report(test_results)
+        reports["test_plan"] = test_plan
 
-    def _extract_business_flows(self):
-        """从业务文档中提取流程名称"""
-        import re
-        # 匹配 "### N. 流程名称" 或 "### 流程名称"
-        pattern = r'### \d+\.\s*(.+?)(?:\n|$)'
-        matches = re.findall(pattern, self.business_doc)
-        self.business_flows = [m.strip() for m in matches]
+        api_doc = self._generate_api_documentation(test_results)
+        reports["api_documentation"] = api_doc
 
-    def _get_result_summary(self) -> dict:
-        """获取结果摘要"""
-        summary = self.test_results.get("summary", {})
-        return {
-            "total": summary.get("total", 0),
-            "passed": summary.get("passed", 0),
-            "failed": summary.get("failed", 0),
-            "skipped": summary.get("skipped", 0),
-            "pass_rate": (summary.get("passed", 0) / summary.get("total", 1) * 100) if summary.get("total", 0) > 0 else 0
-        }
+        if business_doc and Path(business_doc).exists():
+            flow_doc = self._generate_flow_documentation(business_doc)
+            reports["flow_documentation"] = flow_doc
 
-    def _categorize_results(self) -> dict:
-        """按类型分类测试结果"""
-        categories = {
-            "business_flow": [],
-            "navigation": [],
-            "element_check": [],
-            "api_check": [],
-            "form_submit": [],
-            "other": []
-        }
+        summary_report = self._generate_summary_report(reports)
+        reports["summary"] = summary_report
 
-        for result in self.test_results.get("results", []):
-            test_type = result.get("type", "other")
-            if test_type in categories:
-                categories[test_type].append(result)
+        for name, content in reports.items():
+            ext = ".md" if isinstance(content, str) else ".json"
+            path = self.output_dir / f"{name}{ext}"
+            if isinstance(content, str):
+                path.write_text(content, encoding="utf-8")
             else:
-                categories["other"].append(result)
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(content, f, ensure_ascii=False, indent=2)
 
-        return categories
+        print(f"\n✅ 报告已生成到: {self.output_dir}")
+        for name in reports.keys():
+            print(f"   - {name}")
 
-    def _group_by_flow(self) -> dict:
-        """按业务流程分组结果"""
-        flow_groups = {}
+        return reports
 
-        for result in self.test_results.get("results", []):
-            flow_name = result.get("source_flow", "")
-            if flow_name:
-                if flow_name not in flow_groups:
-                    flow_groups[flow_name] = []
-                flow_groups[flow_name].append(result)
+    def _generate_execution_report(self, results: dict) -> str:
+        """生成测试执行报告"""
+        lines = []
+        lines.append("# 测试执行报告")
+        lines.append("")
+        lines.append(f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"**测试人员**: 自动化测试系统")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
 
-        return flow_groups
+        summary = results.get("summary", {})
+        total = summary.get("total", 0)
+        passed = summary.get("passed", 0)
+        failed = summary.get("failed", 0)
+        skipped = summary.get("skipped", 0)
+        pass_rate = round(passed / total * 100, 1) if total > 0 else 0
 
-    def generate_markdown(self) -> str:
-        """生成 Markdown 格式报告"""
-        summary = self._get_result_summary()
-        categories = self._categorize_results()
-        flow_groups = self._group_by_flow()
+        lines.append("## 1. 执行摘要")
+        lines.append("")
+        lines.append("| 指标 | 数值 |")
+        lines.append("|------|------|")
+        lines.append(f"| 用例总数 | **{total}** |")
+        lines.append(f"| 通过数 | ✅ **{passed}** |")
+        lines.append(f"| 失败数 | ❌ **{failed}** |")
+        lines.append(f"| 跳过数 | ⏭️ **{skipped}** |")
+        lines.append(f"| 通过率 | **{pass_rate}%** |")
+        lines.append("")
 
-        md = []
-
-        # 标题
-        md.append("# 🧪 业务测试报告")
-        md.append("")
-        md.append(f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        md.append(f"**测试时间**: {self.test_results.get('timestamp', 'N/A')[:19] if self.test_results.get('timestamp') else 'N/A'}")
-        md.append("")
-
-        # 执行摘要
-        md.append("## 📊 执行摘要")
-        md.append("")
-        md.append(f"| 指标 | 数值 |")
-        md.append(f"|------|------|")
-        md.append(f"| 总测试数 | {summary['total']} |")
-        md.append(f"| 通过 | ✅ {summary['passed']} |")
-        md.append(f"| 失败 | ❌ {summary['failed']} |")
-        md.append(f"| 跳过 | ⏭️ {summary['skipped']} |")
-        md.append(f"| 通过率 | {summary['pass_rate']:.1f}% |")
-        md.append("")
-
-        # 测试状态评估
-        if summary['pass_rate'] >= 90:
-            md.append("🟢 **整体状态**: 优秀，系统稳定性良好")
-        elif summary['pass_rate'] >= 80:
-            md.append("🟡 **整体状态**: 良好，存在少量问题需要修复")
-        elif summary['pass_rate'] >= 60:
-            md.append("🟠 **整体状态**: 一般，需要重点关注失败用例")
+        if pass_rate >= 90:
+            status = "🟢 优秀"
+        elif pass_rate >= 70:
+            status = "🟡 良好"
+        elif pass_rate >= 50:
+            status="🟠 需改进"
         else:
-            md.append("🔴 **整体状态**: 较差，建议暂停发布并进行全面修复")
-        md.append("")
+            status = "🔴 不合格"
 
-        # 业务流程测试结果
-        if flow_groups:
-            md.append("## 🔄 业务流程测试结果")
-            md.append("")
+        lines.append(f"### 测试结论: **{status}**")
+        lines.append("")
 
-            for flow_name, results in flow_groups.items():
-                flow_passed = sum(1 for r in results if r.get("status") == "passed")
-                flow_total = len(results)
-                flow_rate = (flow_passed / flow_total * 100) if flow_total > 0 else 0
+        config = results.get("config", {})
+        if config.get("url"):
+            lines.append(f"- **测试目标**: {config['url']}")
+        lines.append(f"- **测试模式**: {'Playwright 真实浏览器' if config.get('use_playwright') else '静态请求'}")
+        lines.append("")
 
-                status_icon = "✅" if flow_rate == 100 else "⚠️" if flow_rate >= 50 else "❌"
-                md.append(f"### {status_icon} {flow_name}")
-                md.append("")
-                md.append(f"**通过率**: {flow_passed}/{flow_total} ({flow_rate:.0f}%)")
-                md.append("")
+        lines.append("## 2. 测试结果明细")
+        lines.append("")
 
-                # 该流程下的测试用例
-                md.append("| 测试用例 | 状态 | 响应时间 | 备注 |")
-                md.append("|----------|------|----------|------|")
-                for r in results:
-                    icon = {"passed": "✅", "failed": "❌", "skipped": "⏭️"}.get(r.get("status"), "❓")
-                    rt = f"{r.get('response_time', 'N/A')}ms" if r.get("response_time") else "-"
-                    note = r.get("message", "")[:40] if r.get("status") == "passed" else r.get("error", "")[:40]
-                    md.append(f"| {r.get('name', '未命名')} | {icon} {r.get('status', 'unknown').upper()} | {rt} | {note} |")
-                md.append("")
+        test_results_list = results.get("results", [])
+        failed_cases = [r for r in test_results_list if r.get("status") == "failed"]
+        passed_cases = [r for r in test_results_list if r.get("status") == "passed"]
 
-        # 按测试类型分类的结果
-        md.append("## 📋 按测试类型分类")
-        md.append("")
+        if failed_cases:
+            lines.append("### ❌ 失败用例")
+            lines.append("")
+            lines.append("| ID | 名称 | 类型 | 错误信息 | Bug 描述 |")
+            lines.append("|----|------|------|----------|----------|")
+            for case in failed_cases[:20]:
+                bug_desc = case.get("bug_description", "-")[:80]
+                error = case.get("error", "-")[:60]
+                lines.append(f"| {case.get('id', '-')} | {case.get('name', '-')[:30]} "
+                           f"| {case.get('type', '-')} | {error} | {bug_desc} |")
+            lines.append("")
 
-        type_names = {
-            "business_flow": "业务流程测试",
-            "navigation": "页面导航测试",
-            "element_check": "元素存在性测试",
-            "api_check": "API 接口测试",
-            "form_submit": "表单提交测试",
-            "other": "其他测试"
+        if passed_cases:
+            lines.append(f"### ✅ 通过用例 ({len(passed_cases)} 个)")
+            lines.append("")
+            lines.append("| ID | 名称 | 类型 | 响应时间(ms) |")
+            lines.append("|----|------|------|-------------|")
+            for case in passed_cases[:50]:
+                rt = case.get("response_time", "-")
+                lines.append(f"| {case.get('id', '-')} | {case.get('name', '-')[:35]} "
+                           f"| {case.get('type', '-')} | {rt} |")
+            lines.append("")
+
+        by_type = {}
+        for r in test_results_list:
+            t = r.get("type", "unknown")
+            by_type[t] = by_type.get(t, {"total": 0, "passed": 0, "failed": 0})
+            by_type[t]["total"] += 1
+            if r["status"] == "passed":
+                by_type[t]["passed"] += 1
+            else:
+                by_type[t]["failed"] += 1
+
+        lines.append("## 3. 按类型统计")
+        lines.append("")
+        lines.append("| 类型 | 总数 | 通过 | 失败 | 通过率 |")
+        lines.append("|------|------|------|------|--------|")
+        for t, stats in sorted(by_type.items()):
+            rate = round(stats["passed"] / stats["total"] * 100, 1) if stats["total"] > 0 else 0
+            lines.append(f"| {t} | {stats['total']} | {stats['passed']} | {stats['failed']} | {rate}% |")
+        lines.append("")
+
+        lines.append("## 4. 缺陷汇总")
+        lines.append("")
+        lines.append("| 序号 | 严重程度 | 缺陷描述 | 相关用例 | 状态 |")
+        lines.append("|------|----------|----------|----------|------|")
+        for i, case in enumerate(failed_cases[:20], 1):
+            severity = "P0-致命" if "认证" in case.get("bug_description", "") or "登录" in case.get("name", "") \
+                else ("P1-严重" if "API" in case.get("type", "") or "表单" in case.get("name", "")
+                       else "P2-一般")
+            lines.append(f"| {i} | {severity} | {case.get('bug_description', '-')[:40]} "
+                       f"| {case.get('name', '-')[:25]} | 待确认 |")
+        lines.append("")
+
+        lines.append("## 5. 改进建议")
+        lines.append("")
+        suggestions = []
+
+        if len(failed_cases) > 0:
+            auth_failures = [c for c in failed_cases if "401" in str(c.get("actual_status", ""))
+                             or "认证" in c.get("bug_description", "")]
+            if auth_failures:
+                suggestions.append("- 🔐 **鉴权问题**: 发现多个认证相关失败，请检查 Token 配置和有效期")
+
+            api_failures = [c for c in failed_cases if c.get("type") == "api_check"]
+            if api_failures:
+                suggestions.append("- 📡 **接口问题**: 部分 API 返回异常，建议检查后端服务状态和接口变更")
+
+            form_failures = [c for c in failed_cases if c.get("type") == "form_submit"]
+            if form_failures:
+                suggestions.append("- 📋 **表单问题**: 表单提交失败，检查字段校验规则和数据格式要求")
+
+        if not suggestions:
+            suggestions.append("- ✅ 当前版本质量良好，继续保持")
+
+        for s in suggestions:
+            lines.append(s)
+        lines.append("")
+
+        return "\n".join(lines)
+
+    def _generate_test_plan_report(self, results: dict) -> str:
+        """生成测试计划文档"""
+        lines = []
+        lines.append("# 测试计划")
+        lines.append("")
+        lines.append("**项目名称**: Web 应用自动化测试")
+        lines.append(f"**制定日期**: {datetime.now().strftime('%Y-%m-%d')}")
+        lines.append(f"**版本**: V1.0")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+        lines.append("## 1. 测试目标")
+        lines.append("")
+        lines.append("1.1 主要目标")
+        lines.append("- 验证核心业务流程的正确性和完整性")
+        lines.append("- 确保 API 接口功能符合需求规格说明")
+        lines.append("- 检测并记录系统缺陷，推动质量改进")
+        lines.append("- 建立可回归的自动化测试基线")
+        lines.append("")
+        lines.append("1.2 测试范围")
+        lines.append("")
+        lines.append("**包含范围**:")
+        lines.append("- ✅ 用户认证与授权功能")
+        lines.append("- ✅ 核心业务数据的增删改查操作")
+        lines.append("- ✅ 页面导航与交互功能")
+        lines.append("- ✅ API 接口正异常场景验证")
+        lines.append("- ✅ 基础安全漏洞检测")
+        lines.append("")
+        lines.append("**排除范围**:")
+        lines.append("- ❌ 性能压力测试（单独进行）")
+        lines.append("- ❌ 浏览器兼容性全面测试")
+        lines.append("- ❌ 移动端适配测试")
+        lines.append("- ❌ 第三方集成深度测试")
+        lines.append("")
+
+        summary = results.get("summary", {})
+        total = summary.get("total", 0)
+        p0_count = sum(1 for r in results.get("results", []) 
+                      if r.get("status") == "failed" and any(
+                          kw in str(r) for kw in ["登录", "认证", "权限"]))
+        
+        lines.append("## 2. 测试策略")
+        lines.append("")
+        lines.append("### 2.1 测试类型与方法")
+        lines.append("")
+        lines.append("| 测试类型 | 方法 | 工具 | 优先级 |")
+        lines.append("|----------|------|------|--------|")
+        lines.append("| 功能测试 | 黑盒/灰盒 | Playwright + Requests | P0 |")
+        lines.append("| API 接口测试 | 白盒 | aiohttp + 断言库 | P0 |")
+        lines.append("| 安全基础测试 | 黑盒 | 自定义脚本 | P1 |")
+        lines.append("| 回归测试 | 自动化 | CI/CD 集成 | P1 |")
+        lines.append("")
+
+        lines.append("### 2.2 测试环境")
+        lines.append("")
+        lines.append("| 环境 | 用途 | URL | 数据状态 |")
+        lines.append("|------|------|-----|----------|")
+        lines.append("| 开发环境 | 冒烟测试 | 开发地址 | 开发数据 |")
+        lines.append("| 测试环境 | 功能测试 | 测试地址 | 测试数据 |")
+        lines.append("| 预发布环境 | 验收测试 | 预发布地址 | 生产镜像 |")
+        lines.append("")
+
+        lines.append("## 3. 测试进度安排")
+        lines.append("")
+        estimated_hours = max(total * 0.25, 8)
+        lines.append(f"**预估总工时**: {estimated_hours} 小时（含用例设计 + 执行 + 报告）")
+        lines.append("")
+        lines.append("| 阶段 | 内容 | 预估时间 | 输出物 |")
+        lines.append("|------|------|----------|--------|")
+        lines.append("| 需求分析 | 理解业务逻辑，识别测试点 | 2h | 测试点清单 |")
+        lines.append("| 用例设计 | 编写详细测试用例 | 4h | 测试用例文档 |")
+        lines.append("| 环境准备 | 搭建测试环境，准备数据 | 1h | 环境就绪确认 |")
+        lines.append("| 冒烟测试 | 核心流程快速验证 | 1h | 冒烟结果 |")
+        lines.append("| 功能测试 | 全面执行测试用例 | 4h | 测试执行记录 |")
+        lines.append("| 缺陷跟踪 | 问题确认、修复验证 | 2h | 缺陷报告 |")
+        lines.append("| 回归测试 | 修复后回归 | 2h | 回归结果 |")
+        lines.append("| 报告输出 | 整理测试报告 | 1h | 测试报告 |")
+        lines.append("")
+
+        lines.append("## 4. 准入准出标准")
+        lines.append("")
+        lines.append("### 4.1 准入标准")
+        lines.append("- [ ] 测试环境部署完成且可访问")
+        lines.append("- [ ] 测试数据准备完毕（至少覆盖主要场景）")
+        lines.append("- [ ] 需求文档/接口文档已提供或可通过 Swagger 访问")
+        lines.append("- [ ] 测试账号和权限已配置")
+        lines.append("- [ ] 被测版本已确定且已部署到测试环境")
+        lines.append("")
+
+        lines.append("### 4.2 准出标准")
+        lines.append("- [ ] P0（致命）缺陷: **0 个**遗留")
+        lines.append("- [ ] P1（严重）缺陷: ≤ 2 个且有规避方案")
+        lines.append("- [ ] 用例通过率: **≥ 95%**")
+        lines.append("- [ ] 所有测试用例均已执行并有明确结果")
+        lines.append("- [ ] 测试报告已完成并通过评审")
+        lines.append("")
+
+        lines.append("## 5. 风险与应对")
+        lines.append("")
+        lines.append("| 风险项 | 可能性 | 影响 | 应对措施 |")
+        lines.append("|--------|--------|------|----------|")
+        lines.append("| 环境不稳定 | 中 | 高 | 使用容器化环境，保留快照 |")
+        lines.append("| 需求变更 | 中 | 中 | 变更影响分析，及时更新用例 |")
+        lines.append("| 接口变动 | 高 | 中 | 基于 Swagger 动态生成，定期同步 |")
+        lines.append("| 数据依赖 | 低 | 高 | 使用独立测试数据库，自动初始化 |")
+        lines.append("| 时间不足 | 中 | 中 | 优先 P0 用例，分批执行 |")
+        lines.append("")
+
+        return "\n".join(lines)
+
+    def _generate_api_documentation(self, results: dict) -> str:
+        """生成接口文档"""
+        lines = []
+        lines.append("# API 接口测试文档")
+        lines.append("")
+        lines.append(f"> 生成时间: {datetime.now().isoformat()}")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+        api_cases = [r for r in results.get("results", []) if r.get("type") == "api_check"]
+
+        if not api_cases:
+            lines.append("*本次测试未包含接口测试用例*")
+            return "\n".join(lines)
+
+        lines.append("## 1. 接口概览")
+        lines.append("")
+        lines.append(f"**测试接口总数**: {len(api_cases)}")
+        lines.append("")
+
+        passed_apis = [a for a in api_cases if a.get("status") == "passed"]
+        failed_apis = [a for a in api_cases if a.get("status") == "failed"]
+
+        lines.append("| 状态 | 数量 | 占比 |")
+        lines.append("|------|------|------|")
+        lines.append(f"| ✅ 通过 | {len(passed_apis)} | {round(len(passed_apis)/len(api_cases)*100, 1) if api_cases else 0}% |")
+        lines.append(f"| ❌ 失败 | {len(failed_apis)} | {round(len(failed_apis)/len(api_cases)*100, 1) if api_cases else 0}% |")
+        lines.append("")
+
+        lines.append("## 2. 接口详情")
+        lines.append("")
+
+        grouped = {}
+        for api in api_cases:
+            url = api.get("value", api.get("url", ""))
+            base_path = "/".join(url.split("/")[:4]) if url else "unknown"
+            if base_path not in grouped:
+                grouped[base_path] = []
+            grouped[base_path].append(api)
+
+        for group, apis in grouped.items():
+            lines.append(f"### {group}")
+            lines.append("")
+            lines.append("| 接口路径 | 方法 | 结果 | 响应时间 | 备注 |")
+            lines.append("|----------|------|------|----------|------|")
+            for api in apis:
+                icon = "✅" if api["status"] == "passed" else "❌"
+                rt = api.get("response_time", "-")
+                note = api.get("error", "")[:30] or api.get("message", "")[:30]
+                lines.append(f"| `{api.get('value', api.get('url', ''))}` | {api.get('type', '-')} "
+                           f"| {icon} | {rt}ms | {note} |")
+            lines.append("")
+
+        if failed_apis:
+            lines.append("## 3. 问题接口")
+            lines.append("")
+            for api in failed_apis:
+                lines.append(f"#### ❌ {api.get('name', 'Unknown')}")
+                lines.append(f"- **URL**: {api.get('value', api.get('url', ''))}")
+                lines.append(f"- **状态码**: {api.get('actual_status', 'N/A')}")
+                lines.append(f"- **错误**: {api.get('error', 'N/A')}")
+                lines.append(f"- **Bug**: {api.get('bug_description', 'N/A')}")
+                lines.append("")
+
+        return "\n".join(lines)
+
+    def _generate_flow_documentation(self, business_doc_path: str) -> str:
+        """基于业务文档生成流程文档"""
+        content = Path(business_doc_path).read_text(encoding="utf-8")
+
+        lines = []
+        lines.append("# 业务流程测试文档")
+        lines.append("")
+        lines.append(f"> 来源: {business_doc_path}")
+        lines.append(f"> 同步时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        lines.append("")
+        lines.append(content)
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        lines.append("*本文档由 report_generator.py 从业务逻辑文档自动生成*")
+
+        return "\n".join(lines)
+
+    def _generate_summary_report(self, reports: dict) -> dict:
+        """生成摘要 JSON"""
+        return {
+            "generated_at": datetime.now().isoformat(),
+            "reports_generated": list(reports.keys()),
+            "output_directory": str(self.output_dir),
+            "note": "所有报告已生成完毕，可直接用于团队评审和存档"
         }
-
-        for test_type, results in categories.items():
-            if not results:
-                continue
-
-            type_passed = sum(1 for r in results if r.get("status") == "passed")
-            type_total = len(results)
-            type_rate = (type_passed / type_total * 100) if type_total > 0 else 0
-
-            md.append(f"### {type_names.get(test_type, test_type)}")
-            md.append("")
-            md.append(f"**统计**: {type_passed}/{type_total} 通过 ({type_rate:.0f}%)")
-            md.append("")
-
-            md.append("| 用例 | 状态 | 响应时间 | 说明 |")
-            md.append("|------|------|----------|------|")
-            for r in results:
-                icon = {"passed": "✅", "failed": "❌", "skipped": "⏭️"}.get(r.get("status"), "❓")
-                rt = f"{r.get('response_time', 'N/A')}ms" if r.get("response_time") else "-"
-                desc = r.get("message", "")[:30] if r.get("status") == "passed" else r.get("error", "")[:30]
-                md.append(f"| {r.get('name', '未命名')[:30]} | {icon} {r.get('status', 'unknown')[:3].upper()} | {rt} | {desc} |")
-            md.append("")
-
-        # 失败详情
-        failed_tests = [r for r in self.test_results.get("results", []) if r.get("status") == "failed"]
-        if failed_tests:
-            md.append("## ❌ 失败详情")
-            md.append("")
-
-            for r in failed_tests:
-                md.append(f"### {r.get('name', '未命名测试')}")
-                md.append("")
-                md.append(f"- **类型**: {r.get('type', 'unknown')}")
-                md.append(f"- **错误**: {r.get('error', '未知错误')}")
-                if r.get("bug_description"):
-                    md.append(f"- **Bug 描述**: {r.get('bug_description')}")
-                if r.get("expected"):
-                    md.append(f"- **期望结果**: {r.get('expected')}")
-                if r.get("response_time"):
-                    md.append(f"- **响应时间**: {r.get('response_time')}ms")
-                md.append("")
-
-        # 改进建议
-        md.append("## 💡 改进建议")
-        md.append("")
-
-        if failed_tests:
-            md.append(f"1. **优先修复失败用例**: 当前有 {len(failed_tests)} 个失败的测试用例，建议按优先级进行修复。")
-
-        if summary['pass_rate'] < 80:
-            md.append(f"2. **提升测试覆盖率**: 当前通过率 {summary['pass_rate']:.1f}% 低于 80%，建议进行全面回归测试。")
-
-        if not categories.get("api_check"):
-            md.append(f"3. **增加 API 测试**: 当前未执行 API 测试，建议补充接口层面的测试用例。")
-
-        if not flow_groups:
-            md.append(f"4. **关联业务流**: 测试用例未与业务流程关联，建议在生成用例时指定 source_flow 字段。")
-
-        md.append("")
-
-        # 附录：原始数据
-        md.append("## 📎 附录")
-        md.append("")
-        md.append("### 测试配置")
-        config = self.test_results.get("config", {})
-        for k, v in config.items():
-            md.append(f"- {k}: {v}")
-        md.append("")
-
-        return "\n".join(md)
-
-    def generate_html(self) -> str:
-        """生成 HTML 格式报告"""
-        summary = self._get_result_summary()
-        categories = self._categorize_results()
-
-        # 计算各状态的颜色
-        pass_color = "#28a745" if summary['pass_rate'] >= 80 else "#ffc107" if summary['pass_rate'] >= 60 else "#dc3545"
-
-        # 构建测试结果表格
-        result_rows = ""
-        for r in self.test_results.get("results", []):
-            status = r.get("status", "unknown")
-            color = {"passed": "#28a745", "failed": "#dc3545", "skipped": "#ffc107"}.get(status, "#666")
-            result_rows += f"""
-            <tr>
-                <td>{r.get('name', '未命名')}</td>
-                <td>{r.get('type', 'unknown')}</td>
-                <td style="color:{color};font-weight:bold;">{status.upper()}</td>
-                <td>{r.get('response_time', '-')} ms</td>
-            </tr>"""
-
-            if r.get("error"):
-                result_rows += f"""
-            <tr style="background:#f8d7da;">
-                <td colspan="4" style="padding:8px 16px;color:#721c24;">
-                    ❌ {r.get('error')[:100]}
-                </td>
-            </tr>"""
-
-        html = f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <title>业务测试报告</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 1000px;
-            margin: 40px auto;
-            padding: 20px;
-            color: #333;
-            line-height: 1.6;
-        }}
-        h1 {{ color: #1a1a2e; }}
-        h2 {{ color: #16213e; border-bottom: 2px solid #eee; padding-bottom: 8px; margin-top: 32px; }}
-        h3 {{ color: #0f3460; }}
-        .summary {{
-            display: grid;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 16px;
-            margin: 24px 0;
-        }}
-        .card {{
-            background: #f8f9fa;
-            border-radius: 12px;
-            padding: 20px;
-            text-align: center;
-        }}
-        .card .num {{ font-size: 32px; font-weight: bold; }}
-        .card .label {{ color: #666; margin-top: 4px; font-size: 14px; }}
-        .status-bar {{
-            height: 8px;
-            background: #e9ecef;
-            border-radius: 4px;
-            margin: 16px 0;
-            overflow: hidden;
-        }}
-        .status-fill {{
-            height: 100%;
-            background: {pass_color};
-            width: {summary['pass_rate']}%;        }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            margin: 16px 0;
-            font-size: 14px;
-        }}
-        th, td {{
-            padding: 12px;
-            text-align: left;
-            border-bottom: 1px solid #eee;
-        }}
-        th {{ background: #f8f9fa; font-weight: 600; }}
-        .passed {{ color: #28a745; }}
-        .failed {{ color: #dc3545; }}
-        .skipped {{ color: #ffc107; }}
-        .alert {{
-            padding: 12px 16px;
-            border-radius: 8px;
-            margin: 16px 0;
-        }}
-        .alert-success {{ background: #d4edda; color: #155724; }}
-        .alert-warning {{ background: #fff3cd; color: #856404; }}
-        .alert-danger {{ background: #f8d7da; color: #721c24; }}
-    </style>
-</head>
-<body>
-    <h1>🧪 业务测试报告</h1>
-    <p>生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-
-    <h2>📊 执行摘要</h2>
-    <div class="summary">
-        <div class="card">
-            <div class="num">{summary['total']}</div>
-            <div class="label">总测试数</div>
-        </div>
-        <div class="card">
-            <div class="num" style="color:#28a745">{summary['passed']}</div>
-            <div class="label">通过</div>
-        </div>
-        <div class="card">
-            <div class="num" style="color:#dc3545">{summary['failed']}</div>
-            <div class="label">失败</div>
-        </div>
-        <div class="card">
-            <div class="num" style="color:#ffc107">{summary['skipped']}</div>
-            <div class="label">跳过</div>
-        </div>
-        <div class="card">
-            <div class="num" style="color:{pass_color}">{summary['pass_rate']:.1f}%</div>
-            <div class="label">通过率</div>
-        </div>
-    </div>
-
-    <div class="status-bar">
-        <div class="status-fill"></div>
-    </div>
-
-    {'<div class="alert alert-success">🟢 整体状态: 优秀，系统稳定性良好</div>' if summary['pass_rate'] >= 90 else
-     '<div class="alert alert-warning">🟡 整体状态: 良好，存在少量问题需要修复</div>' if summary['pass_rate'] >= 80 else
-     '<div class="alert alert-danger">🔴 整体状态: 较差，建议进行全面修复</div>'}
-
-    <h2>📋 测试结果详情</h2>
-    <table>
-        <tr>
-            <th>测试用例</th>
-            <th>类型</th>
-            <th>状态</th>
-            <th>响应时间</th>
-        </tr>
-        {result_rows}
-    </table>
-
-    <h2>📊 按类型统计</h2>
-    <table>
-        <tr>
-            <th>测试类型</th>
-            <th>总数</th>
-            <th>通过</th>
-            <th>失败</th>
-            <th>通过率</th>
-        </tr>"""
-
-        # 按类型统计行
-        type_names = {
-            "business_flow": "业务流程测试",
-            "navigation": "页面导航测试",
-            "element_check": "元素存在性测试",
-            "api_check": "API 接口测试",
-            "form_submit": "表单提交测试",
-            "other": "其他测试"
-        }
-
-        for test_type, results in categories.items():
-            if not results:
-                continue
-            type_passed = sum(1 for r in results if r.get("status") == "passed")
-            type_total = len(results)
-            type_rate = (type_passed / type_total * 100) if type_total > 0 else 0
-            type_color = "#28a745" if type_rate >= 80 else "#ffc107" if type_rate >= 60 else "#dc3545"
-
-            html += f"""
-        <tr>
-            <td>{type_names.get(test_type, test_type)}</td>
-            <td>{type_total}</td>
-            <td>{type_passed}</td>
-            <td>{type_total - type_passed}</td>
-            <td style="color:{type_color}">{type_rate:.0f}%</td>
-        </tr>"""
-
-        html += """
-    </table>
-</body>
-</html>"""
-
-        return html
-
-    def generate_report(self, format_type: str = "markdown") -> str:
-        """生成报告"""
-        self.load_data()
-
-        if format_type == "html":
-            return self.generate_html()
-        else:
-            return self.generate_markdown()
-
-    def save_report(self, output_file: str, format_type: str = "markdown"):
-        """保存报告"""
-        report = self.generate_report(format_type)
-
-        output_path = Path(output_file)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(report)
-
-        print(f"📁 测试报告已保存: {output_path}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="业务测试报告生成器")
-    parser.add_argument("--test-results", "-r", required=True, help="测试结果 JSON 文件路径")
-    parser.add_argument("--business-doc", "-b", help="业务逻辑文档路径 (Markdown)")
-    parser.add_argument("--format", "-f", choices=["markdown", "html"], default="markdown", help="报告格式")
-    parser.add_argument("--output", "-o", default="./test_report.md", help="输出文件路径")
+    parser = argparse.ArgumentParser(description="专业测试报告生成器")
+    parser.add_argument("--test-results", "-r", required=True, help="测试结果 JSON 文件")
+    parser.add_argument("--business-doc", "-b", default=None, help="业务逻辑文档 (Markdown)")
+    parser.add_argument("--output-dir", "-o", default="./test_results", help="输出目录")
     args = parser.parse_args()
 
-    generator = ReportGenerator(args.test_results, args.business_doc or "")
-    generator.save_report(args.output, args.format)
+    with open(args.test_results, "r", encoding="utf-8") as f:
+        results = json.load(f)
+
+    generator = ReportGenerator(args.output_dir)
+    generator.generate_all(results, args.business_doc)
 
 
 if __name__ == "__main__":

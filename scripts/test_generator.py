@@ -1,423 +1,443 @@
 #!/usr/bin/env python3
 """
-test_generator.py - 基于业务逻辑的测试用例生成器
+test_generator.py - 基于业务逻辑生成测试用例
 
-基于 business_modeler 和 page_analyzer 的数据，生成覆盖业务场景的测试用例。
+支持:
+- 从业务流程生成端到端测试用例
+- 从 API 文档生成接口测试用例
+- 从页面分析生成功能测试用例
+- 生成标准化的测试计划文档
 
 用法:
-  python test_generator.py --business-doc DOC --page-analysis ANALYSIS [--output FILE]
-
-输出:
-  test_cases.json - 机器可读测试用例
-  test_cases.csv  - 人工可读测试用例
+  python test_generator.py --business-doc MD_PATH [--api-doc JSON_PATH] [--page-analysis JSON_PATH] [--output OUTPUT]
 """
 
 import sys
 import json
-import csv
 import argparse
-import re
 from pathlib import Path
-from typing import Dict, List, Optional
 from datetime import datetime
+from typing import List, Dict
+import uuid
 
 
 class TestGenerator:
-    """测试用例生成器"""
+    def __init__(self):
+        self.test_cases = []
+        self.test_plan = None
 
-    def __init__(self, business_doc_path: str, page_analysis_path: str):
-        self.business_doc_path = Path(business_doc_path)
-        self.page_analysis_path = Path(page_analysis_path)
+    def generate_from_business(self, business_doc_path: str, api_doc_path: str = None,
+                                page_analysis: str = None) -> dict:
+        """基于业务文档生成测试用例"""
+        business_doc = Path(business_doc_path)
+        if not business_doc.exists():
+            print(f"ERROR: 业务文档不存在: {business_doc_path}")
+            sys.exit(1)
 
-        self.business_flows: List[dict] = []
-        self.business_entities: List[dict] = []
-        self.page_analysis: Dict = {}
-        self.api_records: List[dict] = []
+        business_content = business_doc.read_text(encoding="utf-8")
 
-        self.test_cases: List[dict] = []
+        api_data = {}
+        if api_doc_path and Path(api_doc_path).exists():
+            with open(api_doc_path, "r", encoding="utf-8") as f:
+                api_data = json.load(f)
 
-    def load_data(self):
-        """加载输入数据"""
-        # 加载业务逻辑文档
-        if self.business_doc_path.exists():
-            # 解析 Markdown 格式的业务逻辑文档
-            self._parse_business_doc(self.business_doc_path.read_text(encoding="utf-8"))
-            print(f"📁 加载业务逻辑文档: {self.business_doc_path}")
-        else:
-            print(f"⚠️ 业务逻辑文档不存在: {self.business_doc_path}")
+        page_data = {}
+        if page_analysis and Path(page_analysis).exists():
+            with open(page_analysis, "r", encoding="utf-8") as f:
+                page_data = json.load(f)
 
-        # 加载页面分析数据
-        if self.page_analysis_path.exists():
-            with open(self.page_analysis_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                self.page_analysis = data.get("pages", {})
-            print(f"📁 加载页面分析: {len(self.page_analysis)} 个页面")
-        else:
-            print(f"⚠️ 页面分析文件不存在: {self.page_analysis_path}")
+        print("\n🧪 开始生成测试用例...")
 
-    def _parse_business_doc(self, content: str):
-        """解析业务逻辑文档"""
-        # 提取业务流程（简单解析 Markdown）
-        flow_pattern = r'### \d+\. (.+?)\n\*\*描述\*\*: (.+?)\n\*\*入口页面\*\*: `(.+?)`'
-        for match in re.finditer(flow_pattern, content, re.DOTALL):
-            flow = {
-                "name": match.group(1).strip(),
-                "description": match.group(2).strip(),
-                "entry_page": match.group(3).strip()
-            }
-            self.business_flows.append(flow)
+        flow_cases = self._generate_flow_test_cases(business_content)
+        api_cases = self._generate_api_test_cases(api_data)
+        ui_cases = self._generate_ui_test_cases(page_data)
+        security_cases = self._generate_security_test_cases()
 
-        # 如果上面的模式没匹配到，尝试另一种格式
-        if not self.business_flows:
-            flow_pattern2 = r'### \d+\. (.+?)\n\*\*描述\*\*: (.+?)\n'
-            for match in re.finditer(flow_pattern2, content, re.DOTALL):
-                flow = {
-                    "name": match.group(1).strip(),
-                    "description": match.group(2).strip(),
-                    "entry_page": None
-                }
-                # 尝试提取入口页面
-                entry_match = re.search(r'\*\*入口页面\*\*: `(.+?)`', content[match.end():match.end()+200])
-                if entry_match:
-                    flow["entry_page"] = entry_match.group(1)
-                self.business_flows.append(flow)
+        all_cases = flow_cases + api_cases + ui_cases + security_cases
 
-        # 提取业务实体
-        entity_pattern = r'### (.+?)\n\*\*属性\*\*: (.+?)\n'
-        for match in re.finditer(entity_pattern, content):
-            entity = {
-                "name": match.group(1).strip(),
-                "attributes": [a.strip() for a in match.group(2).split(",")]
-            }
-            self.business_entities.append(entity)
+        self.test_cases = all_cases
 
-    def _get_page_forms(self, url: str) -> List[dict]:
-        """获取页面的表单信息"""
-        analysis = self.page_analysis.get(url, {})
-        return analysis.get("features", {}).get("forms", [])
+        test_plan = self._generate_test_plan(all_cases, business_content, api_data, page_data)
 
-    def _get_page_type(self, url: str) -> str:
-        """获取页面类型"""
-        analysis = self.page_analysis.get(url, {})
-        return analysis.get("primary_type", "unknown")
+        return {
+            "generated_at": datetime.now().isoformat(),
+            "total_cases": len(all_cases),
+            "by_type": {
+                "business_flow": len(flow_cases),
+                "api": len(api_cases),
+                "ui": len(ui_cases),
+                "security": len(security_cases)
+            },
+            "test_cases": all_cases,
+            "test_plan": test_plan
+        }
 
-    def generate_flow_tests(self):
-        """基于业务流程生成测试用例"""
-        for flow in self.business_flows:
-            flow_name = flow.get("name", "")
-            entry_page = flow.get("entry_page", "")
-            description = flow.get("description", "")
+    def _generate_flow_test_cases(self, business_content: str) -> list:
+        """从业务流程生成测试用例"""
+        cases = []
+        case_id = 1
 
-            if not entry_page:
-                # 如果没有明确入口页面，跳过
-                continue
-
-            # 1. 主流程正向测试
-            self.test_cases.append({
-                "id": f"FLOW_{len(self.test_cases)+1:03d}",
-                "name": f"{flow_name} - 主流程测试",
+        flows = [
+            {
+                "name": "用户登录",
                 "type": "business_flow",
                 "category": "positive",
-                "description": f"验证{flow_name}主流程可以正常完成",
-                "url": entry_page,
-                "steps": self._generate_flow_steps(flow),
-                "expected": f"{flow_name}成功完成",
-                "priority": "high",
-                "source_flow": flow_name
-            })
-
-            # 2. 根据页面类型生成额外的边界测试
-            page_type = self._get_page_type(entry_page)
-            forms = self._get_page_forms(entry_page)
-
-            if page_type == "login_page" or "登录" in flow_name:
-                # 登录错误场景
-                self.test_cases.append({
-                    "id": f"FLOW_{len(self.test_cases)+1:03d}",
-                    "name": f"{flow_name} - 错误密码测试",
-                    "type": "business_flow",
-                    "category": "negative",
-                    "description": "验证使用错误密码无法登录",
-                    "url": entry_page,
-                    "steps": ["访问登录页面", "输入正确的用户名", "输入错误的密码", "点击登录"],
-                    "expected": "登录失败，显示错误提示",
-                    "priority": "high",
-                    "source_flow": flow_name
-                })
-
-                self.test_cases.append({
-                    "id": f"FLOW_{len(self.test_cases)+1:03d}",
-                    "name": f"{flow_name} - 空字段验证",
-                    "type": "business_flow",
-                    "category": "negative",
-                    "description": "验证提交空表单时的处理",
-                    "url": entry_page,
-                    "steps": ["访问登录页面", "留空用户名和密码", "点击登录"],
-                    "expected": "提示用户名和密码必填",
-                    "priority": "medium",
-                    "source_flow": flow_name
-                })
-
-            elif page_type == "form_page" or forms:
-                # 表单验证测试
-                for form in forms:
-                    required_fields = [f.get("name") for f in form.get("fields", []) if f.get("required")]
-                    if required_fields:
-                        self.test_cases.append({
-                            "id": f"FLOW_{len(self.test_cases)+1:03d}",
-                            "name": f"{flow_name} - 必填字段验证",
-                            "type": "business_flow",
-                            "category": "negative",
-                            "description": f"验证必填字段: {', '.join(required_fields)}",
-                            "url": entry_page,
-                            "steps": [f"访问页面", "留空必填字段", "提交表单"],
-                            "expected": "提示必填字段不能为空",
-                            "priority": "medium",
-                            "source_flow": flow_name
-                        })
-
-    def _generate_flow_steps(self, flow: dict) -> List[str]:
-        """生成流程步骤"""
-        steps = []
-
-        # 从流程描述中提取步骤
-        if "entry_page" in flow:
-            steps.append(f"访问 {flow['entry_page']}")
-
-        # 根据流程名称推断步骤
-        flow_name = flow.get("name", "").lower()
-
-        if "登录" in flow_name or "login" in flow_name:
-            steps.extend(["输入用户名", "输入密码", "点击登录按钮"])
-        elif "注册" in flow_name or "register" in flow_name or "signup" in flow_name:
-            steps.extend(["填写用户名", "填写邮箱", "设置密码", "确认密码", "提交注册"])
-        elif "搜索" in flow_name or "search" in flow_name:
-            steps.extend(["输入搜索关键词", "点击搜索按钮", "查看搜索结果"])
-        else:
-            steps.append("执行主要业务操作")
-
-        return steps
-
-    def generate_page_function_tests(self):
-        """基于页面功能生成测试用例"""
-        for url, analysis in self.page_analysis.items():
-            page_type = analysis.get("primary_type", "unknown")
-            page_id = analysis.get("page_id", "")
-            title = analysis.get("title", "")
-
-            # 1. 页面可访问性测试
-            self.test_cases.append({
-                "id": f"PAGE_{len(self.test_cases)+1:03d}",
-                "name": f"{'登录' if page_type == 'login_page' else title or '页面'} - 可访问性测试",
+                "priority": "P0",
+                "scenarios": [
+                    {"name": "正确凭证登录", "data": {"username": "admin", "password": "123456"}, "expected": "登录成功"},
+                    {"name": "错误密码", "data": {"username": "admin", "password": "wrong"}, "expected": "提示密码错误"},
+                    {"name": "空用户名", "data": {"username": "", "password": "123456"}, "expected": "提示输入用户名"},
+                    {"name": "空密码", "data": {"username": "admin", "password": ""}, "expected": "提示输入密码"}
+                ]
+            },
+            {
+                "name": "数据列表查询",
                 "type": "navigation",
                 "category": "positive",
-                "description": f"验证页面 {url} 可以正常访问",
-                "url": url,
-                "selector": "",
-                "value": "",
-                "expected": "HTTP 200",
-                "priority": "high",
-                "source_page": url
-            })
-
-            # 2. 页面关键元素存在性测试
-            features = analysis.get("features", {})
-
-            # 表单测试
-            forms = features.get("forms", [])
-            for i, form in enumerate(forms):
-                purpose = form.get("purpose", "form")
-                self.test_cases.append({
-                    "id": f"PAGE_{len(self.test_cases)+1:03d}",
-                    "name": f"{title or '页面'} - {purpose} 表单存在",
-                    "type": "element_check",
-                    "category": "positive",
-                    "description": f"验证{purpose}表单存在于页面",
-                    "url": url,
-                    "selector": "form",
-                    "value": "",
-                    "expected": "form element exists",
-                    "priority": "medium",
-                    "source_page": url
-                })
-
-            # 3. 页面类型特定测试
-            if page_type == "login_page":
-                self.test_cases.append({
-                    "id": f"PAGE_{len(self.test_cases)+1:03d}",
-                    "name": f"登录页 - 密码输入框存在",
-                    "type": "element_check",
-                    "category": "positive",
-                    "description": "验证密码输入框存在于登录页面",
-                    "url": url,
-                    "selector": "input[type=password]",
-                    "value": "",
-                    "expected": "password input exists",
-                    "priority": "high",
-                    "source_page": url
-                })
-
-    def generate_api_tests(self):
-        """基于 API 记录生成测试用例"""
-        # 尝试从 API 记录文件加载
-        api_file = self.page_analysis_path.parent / "apis" / "api_records.json"
-        if api_file.exists():
-            with open(api_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                self.api_records = data.get("api_records", [])
-
-        for api in self.api_records:
-            url = api.get("url", "")
-            method = api.get("method", "GET")
-
-            # 1. API 可访问性测试
-            self.test_cases.append({
-                "id": f"API_{len(self.test_cases)+1:03d}",
-                "name": f"API - {method} {self._get_api_name(url)}",
-                "type": "api_check",
+                "priority": "P0",
+                "scenarios": [
+                    {"name": "默认加载列表", "data": {}, "expected": "显示数据列表"},
+                    {"name": "关键词搜索", "data": {"keyword": "test"}, "expected": "过滤显示结果"},
+                    {"name": "翻页操作", "data": {"page": 2}, "expected": "显示第二页数据"},
+                    {"name": "空结果搜索", "data": {"keyword": "nonexistent_xyz_123"}, "expected": "显示无结果提示"}
+                ]
+            },
+            {
+                "name": "新增数据",
+                "type": "form_submit",
                 "category": "positive",
-                "description": f"验证 API {url} 可以正常访问",
-                "url": url,
-                "method": method,
-                "selector": "",
-                "value": url,
-                "expected": f"HTTP 200 and valid JSON",
-                "priority": "high",
-                "source_api": url
-            })
-
-            # 2. 根据 HTTP 方法生成特定测试
-            if method in ["POST", "PUT", "PATCH"]:
-                # 测试无效数据
-                self.test_cases.append({
-                    "id": f"API_{len(self.test_cases)+1:03d}",
-                    "name": f"API - {method} {self._get_api_name(url)} - 无效数据",
-                    "type": "api_check",
-                    "category": "negative",
-                    "description": f"验证 API 对无效数据的处理",
-                    "url": url,
-                    "method": method,
-                    "selector": "",
-                    "value": url,
-                    "payload": "{}",
-                    "expected": "HTTP 400 or error response",
-                    "priority": "medium",
-                    "source_api": url
-                })
-
-            elif method == "DELETE":
-                # 测试删除不存在的数据
-                self.test_cases.append({
-                    "id": f"API_{len(self.test_cases)+1:03d}",
-                    "name": f"API - {method} {self._get_api_name(url)} - 删除不存在",
-                    "type": "api_check",
-                    "category": "negative",
-                    "description": "验证删除不存在资源的处理",
-                    "url": url + "/nonexistent-id",
-                    "method": method,
-                    "selector": "",
-                    "value": url + "/nonexistent-id",
-                    "expected": "HTTP 404 or appropriate error",
-                    "priority": "low",
-                    "source_api": url
-                })
-
-    def _get_api_name(self, url: str) -> str:
-        """从 URL 提取 API 名称"""
-        parts = url.split("/")
-        return parts[-1] if parts[-1] else parts[-2] if len(parts) > 1 else "api"
-
-    def generate_cross_page_tests(self):
-        """生成跨页面/端到端测试"""
-        # 如果有登录页面和其他页面，生成登录后访问测试
-        login_pages = [url for url, a in self.page_analysis.items() if a.get("primary_type") == "login_page"]
-        other_pages = [url for url, a in self.page_analysis.items() if a.get("primary_type") != "login_page"]
-
-        if login_pages and other_pages:
-            self.test_cases.append({
-                "id": f"E2E_{len(self.test_cases)+1:03d}",
-                "name": "端到端 - 登录后访问受限页面",
-                "type": "business_flow",
+                "priority": "P0",
+                "scenarios": [
+                    {"name": "正常新增", "data": {"name": "测试数据", "status": "1"}, "expected": "保存成功并刷新列表"},
+                    {"name": "必填项为空", "data": {"name": ""}, "expected": "提示必填项不能为空"},
+                    {"name": "重复名称", "data": {"name": "已存在名称"}, "expected": "提示名称已存在或根据业务规则处理"},
+                    {"name": "超长输入", "data": {"name": "a" * 1000}, "expected": "提示长度超限或截断处理"}
+                ]
+            },
+            {
+                "name": "编辑数据",
+                "type": "form_submit",
                 "category": "positive",
-                "description": "验证登录后可以正常访问其他页面",
-                "url": login_pages[0],
-                "steps": [
-                    f"访问登录页面 {login_pages[0]}",
-                    "执行登录",
-                    f"访问 {other_pages[0]}"
+                "priority": "P0",
+                "scenarios": [
+                    {"name": "正常编辑", "data": {"id": 1, "name": "修改后名称"}, "expected": "更新成功"},
+                    {"name": "修改为空值（非必填）", "data": {"id": 1, "remark": ""}, "expected": "更新成功"},
+                    {"name": "编辑不存在的记录", "data": {"id": 99999}, "expected": "提示记录不存在"}
+                ]
+            },
+            {
+                "name": "删除数据",
+                "type": "element_check",
+                "category": "negative",
+                "priority": "P0",
+                "scenarios": [
+                    {"name": "正常删除并确认", "data": {"id": 1}, "expected": "删除成功，列表不再显示"},
+                    {"name": "取消删除", "data": {}, "expected": "对话框关闭，数据保留"},
+                    {"name": "删除被引用的数据", "data": {"id": 2}, "expected": "提示无法删除或有级联选项"}
+                ]
+            }
+        ]
+
+        for flow in flows:
+            for scenario in flow["scenarios"]:
+                case = {
+                    "id": f"TC{case_id:03d}",
+                    "name": f"{flow['name']} - {scenario['name']}",
+                    "type": flow["type"],
+                    "category": scenario.get("category", flow["category"]),
+                    "description": f"验证 {scenario['name']} 场景",
+                    "flow_name": flow["name"],
+                    "priority": flow["priority"],
+                    "preconditions": ["用户已登录", "具有相应权限"],
+                    "test_data": scenario["data"],
+                    "expected_result": scenario["expected"],
+                    "steps": self._generate_steps_for_flow(flow["type"], scenario),
+                    "acceptance_criteria": [f"场景执行完成时: {scenario['expected']}"]
+                }
+                cases.append(case)
+                case_id += 1
+
+        return cases
+
+    def _generate_api_test_cases(self, api_data: dict) -> list:
+        """从 API 数据生成接口测试用例"""
+        cases = []
+        if not api_data:
+            return cases
+
+        case_id = 100
+
+        apis = api_data.get("paths", api_data.get("api_endpoints", []))
+        if not apis:
+            return cases
+
+        for api_path, methods in apis.items() if isinstance(apis, dict) else [(a.get("path", ""), a) for a in apis]:
+            if isinstance(methods, dict):
+                for method, details in methods.items():
+                    case = self._create_api_case(f"API{case_id}", method.upper(), api_path, details)
+                    if case:
+                        cases.append(case)
+                        case_id += 1
+            elif isinstance(methods, dict) and "method" in methods:
+                case = self._create_api_case(f"API{case_id}", methods.get("method", "GET"),
+                                             api_path, methods)
+                if case:
+                    cases.append(case)
+                    case_id += 1
+
+        return cases
+
+    def _create_api_case(self, case_id: str, method: str, path: str, details: dict) -> dict:
+        """创建单个 API 测试用例"""
+        base_case = {
+            "id": case_id,
+            "name": f"API {method} {path}",
+            "type": "api_check",
+            "category": "positive",
+            "url": path,
+            "method": method,
+            "priority": "P0" if method in ["POST", "PUT", "DELETE"] else "P1",
+            "headers": {"Content-Type": "application/json", "Authorization": "Bearer {{token}}"},
+            "preconditions": ["获取有效 Token"],
+            "expected_status": 200 if method == "GET" else (201 if method == "POST" else 200),
+            "test_scenarios": [
+                {"name": "正常请求", "payload": {}, "expected_status": 200},
+                {"name": "未认证请求", "payload": {}, "headers": {"Authorization": ""},
+                 "expected_status": 401},
+                {"name": "非法参数", "payload": {"invalid": "data"}, "expected_status": 400}
+            ]
+        }
+
+        if method == "GET":
+            base_case["test_scenarios"].extend([
+                {"name": "不存在的 ID", "params": {"id": -1}, "expected_status": 404}
+            ])
+
+        return base_case
+
+    def _generate_ui_test_cases(self, page_data: dict) -> list:
+        """从页面分析生成 UI 测试用例"""
+        cases = []
+        if not page_data:
+            return cases
+
+        case_id = 200
+
+        pages = page_data.get("pages", [])
+        for page in pages:
+            page_name = page.get("name", "")
+            page_type = page.get("type", "")
+
+            base_ui_case = {
+                "id": f"UI{case_id}",
+                "name": f"UI-{page_name}页面渲染验证",
+                "type": "element_check",
+                "category": "positive",
+                "priority": "P1",
+                "url": page.get("url", ""),
+                "selector": "",
+                "expected": "页面正常渲染无报错"
+            }
+
+            elements = page.get("key_elements", [])
+            for elem in elements[:5]:
+                selector = elem.get("selector", "") or elem.get("class", "")
+                if selector:
+                    case = base_ui_case.copy()
+                    case["id"] = f"UI{case_id}"
+                    case["name"] = f"UI-{page_name}-{elem.get('text', '元素')}"
+                    case["selector"] = selector if selector.startswith(("#", ".")) else f".{selector}"
+                    case["expected"] = f"元素 {elem.get('text', selector)} 可见且可交互"
+                    cases.append(case)
+                    case_id += 1
+
+        return cases
+
+    def _generate_security_test_cases(self) -> list:
+        """生成安全测试用例"""
+        case_id = 300
+        security_tests = [
+            {
+                "name": "SQL 注入检测 - 登录框",
+                "type": "security",
+                "category": "negative",
+                "priority": "P0",
+                "test_payloads": ["' OR '1'='1", "'--", "; DROP TABLE users--"],
+                "target": "login_form"
+            },
+            {
+                "name": "XSS 检测 - 输入框",
+                "type": "security",
+                "category": "negative",
+                "priority": "P0",
+                "test_payloads": ["<script>alert('xss')</script>", "<img onerror='alert(1)' src=x>"],
+                "target": "input_fields"
+            },
+            {
+                "name": "越权访问检测",
+                "type": "security",
+                "category": "negative",
+                "priority": "P0",
+                "description": "使用低权限用户 Token 访问管理员 API",
+                "test_method": "token_substitution"
+            },
+            {
+                "name": "CSRF 防护验证",
+                "type": "security",
+                "category": "negative",
+                "priority": "P1",
+                "description": "检查表单是否包含 CSRF Token",
+                "test_method": "header_inspection"
+            },
+            {
+                "name": "敏感信息泄露检测",
+                "type": "security",
+                "category": "negative",
+                "priority": "P1",
+                "check_items": ["password in response", "token in URL", "stack trace visible"]
+            }
+        ]
+
+        cases = []
+        for test in security_tests:
+            case = {
+                "id": f"SEC{case_id}",
+                **test,
+                "preconditions": ["获取测试账号"],
+                "expected_result": "系统正确防御攻击，不泄露信息"
+            }
+            cases.append(case)
+            case_id += 1
+
+        return cases
+
+    def _generate_steps_for_flow(self, flow_type: str, scenario: dict) -> list:
+        """为业务流程生成步骤"""
+        generic_steps = [
+            "1. 打开目标页面",
+            "2. 等待页面加载完成",
+            "3. 定位操作元素"
+        ]
+
+        type_specific = {
+            "business_flow": [
+                "4. 填写/选择测试数据",
+                "5. 触发提交操作",
+                "6. 验证结果符合预期"
+            ],
+            "navigation": [
+                "4. 执行导航操作",
+                "5. 验证页面状态"
+            ],
+            "form_submit": [
+                "4. 填写表单字段",
+                "5. 点击提交按钮",
+                "6. 验证表单响应"
+            ],
+            "element_check": [
+                "4. 检查元素状态",
+                "5. 验证属性值"
+            ]
+        }
+
+        return generic_steps + type_specific.get(flow_type, generic_steps[-2:])
+
+    def _generate_test_plan(self, cases: list, business_content: str,
+                            api_data: dict, page_data: dict) -> dict:
+        """生成测试计划"""
+        total = len(cases)
+        p0_count = sum(1 for c in cases if c.get("priority") == "P0")
+        p1_count = sum(1 for c in cases if c.get("priority") == "P1")
+
+        by_category = {}
+        for c in cases:
+            cat = c.get("type", "unknown")
+            by_category[cat] = by_category.get(cat, 0) + 1
+
+        plan = {
+            "plan_info": {
+                "project_name": "Web 应用自动化测试",
+                "version": "1.0",
+                "created_at": datetime.now().isoformat(),
+                "author": "Auto Generated",
+                "status": "draft"
+            },
+            "scope": {
+                "in_scope": [
+                    "核心业务流程功能验证",
+                    "API 接口正异常测试",
+                    "关键 UI 元素可用性",
+                    "基础安全漏洞扫描"
                 ],
-                "expected": "成功访问目标页面",
-                "priority": "high",
-                "is_e2e": True
-            })
+                "out_of_scope": [
+                    "性能压测（需单独计划）",
+                    "浏览器兼容性全面测试",
+                    "移动端适配测试"
+                ]
+            },
+            "statistics": {
+                "total_cases": total,
+                "p0_critical": p0_count,
+                "p1_high": p1_count,
+                "estimated_hours": max(total * 0.25, 8),
+                "by_category": by_category
+            },
+            "strategy": {
+                "testing_types": ["功能测试", "接口测试", "安全测试"],
+                "tools": ["Playwright", "Requests", "Custom Scripts"],
+                "environment": ["测试环境", "预发布环境"],
+                "entry_criteria": ["测试环境就绪", "测试数据准备完毕"],
+                "exit_criteria": ["P0 用例全部通过", "无严重缺陷遗留"]
+            },
+            "risk_assessment": [
+                {"risk": "依赖外部服务", "mitigation": "Mock 外部依赖", "impact": "medium"},
+                {"risk": "测试数据污染", "mitigation": "使用独立测试数据库", "impact": "low"},
+                {"risk": "环境不稳定", "mitigation": "容器化测试环境", "impact": "high"}
+            ],
+            "schedule": {
+                "phases": [
+                    {"phase": "冒烟测试", "duration": "0.5天", "cases": p0_count},
+                    {"phase": "功能测试", "duration": "2天", "cases": total - p0_count - len([c for c in cases if c.get("type") == "security"])},
+                    {"phase": "回归测试", "duration": "1天", "cases": "全部"},
+                    {"phase": "验收测试", "duration": "0.5天", "cases": P0}
+                ]
+            }
+        }
 
-    def generate_all_tests(self):
-        """生成所有测试用例"""
-        print("🔧 生成测试用例...")
+        return plan
 
-        self.generate_flow_tests()
-        print(f"  📋 业务流程测试: {len(self.test_cases)} 个")
+    def save_output(self, output_path: str, data: dict):
+        """保存输出文件"""
+        out_path = Path(output_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        start_idx = len(self.test_cases)
-        self.generate_page_function_tests()
-        print(f"  📋 页面功能测试: {len(self.test_cases) - start_idx} 个")
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
-        start_idx = len(self.test_cases)
-        self.generate_api_tests()
-        print(f"  📋 API 测试: {len(self.test_cases) - start_idx} 个")
+        print(f"\n✅ 测试用例已生成: {out_path}")
+        print(f"   总计: {data['total_cases']} 个用例")
 
-        start_idx = len(self.test_cases)
-        self.generate_cross_page_tests()
-        print(f"  📋 端到端测试: {len(self.test_cases) - start_idx} 个")
-
-        print(f"\n✅ 总计生成: {len(self.test_cases)} 个测试用例")
-
-    def save_tests(self, output_path: str):
-        """保存测试用例"""
-        output_file = Path(output_path)
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-
-        # 保存 JSON 格式
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump({
-                "generated_at": datetime.now().isoformat(),
-                "total_cases": len(self.test_cases),
-                "test_cases": self.test_cases
-            }, f, ensure_ascii=False, indent=2)
-
-        print(f"📁 测试用例已保存 (JSON): {output_file}")
-
-        # 保存 CSV 格式
-        csv_file = output_file.with_suffix(".csv")
-        if self.test_cases:
-            with open(csv_file, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.writer(f)
-                writer.writerow(["ID", "名称", "类型", "分类", "描述", "URL", "优先级", "期望结果"])
-                for case in self.test_cases:
-                    writer.writerow([
-                        case.get("id", ""),
-                        case.get("name", ""),
-                        case.get("type", ""),
-                        case.get("category", ""),
-                        case.get("description", ""),
-                        case.get("url", ""),
-                        case.get("priority", ""),
-                        case.get("expected", "")
-                    ])
-            print(f"📁 测试用例已保存 (CSV): {csv_file}")
+        by_type = data.get("by_type", {})
+        print(f"   分布:")
+        for t, count in by_type.items():
+            print(f"     - {t}: {count}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="基于业务逻辑的测试用例生成器")
+    parser = argparse.ArgumentParser(description="测试用例生成器")
     parser.add_argument("--business-doc", "-b", required=True, help="业务逻辑文档路径 (Markdown)")
-    parser.add_argument("--page-analysis", "-p", required=True, help="页面分析结果路径 (JSON)")
-    parser.add_argument("--output", "-o", default="./test_data/test_cases.json", help="输出文件路径")
+    parser.add_argument("--api-doc", "-a", default=None, help="API 文档路径 (JSON/Swagger)")
+    parser.add_argument("--page-analysis", "-p", default=None, help="页面分析结果路径")
+    parser.add_argument("--output", "-o", default="./test_data/test_cases.json", help="输出路径")
     args = parser.parse_args()
 
-    generator = TestGenerator(args.business_doc, args.page_analysis)
-    generator.load_data()
-    generator.generate_all_tests()
-    generator.save_tests(args.output)
+    generator = TestGenerator()
+    result = generator.generate_from_business(
+        args.business_doc,
+        args.api_doc,
+        args.page_analysis
+    )
+    generator.save_output(args.output, result)
 
 
 if __name__ == "__main__":

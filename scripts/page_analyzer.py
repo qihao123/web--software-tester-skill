@@ -2,504 +2,330 @@
 """
 page_analyzer.py - 页面功能分析器
 
-分析 crawler 采集的页面数据，识别页面类型、功能和交互流程。
+分析采集到的页面数据，识别：
+- 页面类型（列表页/详情页/表单页/登录页等）
+- 交互流程
+- 可操作元素
+- 数据展示区域
 
 用法:
-  python page_analyzer.py --input-dir DIR [--output FILE]
-
-输入:
-  input_dir/page_tree.json
-  input_dir/pages/*.html
-  input_dir/pages/*_meta.json
-
-输出:
-  page_analysis.json - 页面功能分析结果
+  python page_analyzer.py --input-dir DATA_DIR --output OUTPUT_PATH
 """
 
 import sys
 import json
-import re
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional
-
-try:
-    from bs4 import BeautifulSoup
-except ImportError:
-    print("ERROR: 缺少 beautifulsoup4")
-    print("安装方法: pip install beautifulsoup4")
-    sys.exit(1)
+from typing import List, Dict
 
 
 class PageAnalyzer:
-    """页面功能分析器"""
-
-    # 页面类型特征关键词
-    PAGE_TYPE_PATTERNS = {
-        "login_page": {
-            "keywords": ["login", "sign in", "登录", "登入", "log in", "signin"],
-            "elements": ["input[type=password]", "input[name=password]", "#password"],
-            "required": ["password"]
-        },
-        "register_page": {
-            "keywords": ["register", "sign up", "注册", "signup", "create account"],
-            "elements": ["input[name=password_confirmation]", "input[name=confirm_password]"],
-        },
-        "search_page": {
-            "keywords": ["search", "搜索", "查询", "find", "look for"],
-            "elements": ["input[type=search]", "input[name=q]", "input[name=query]", "input[name=keyword]"],
-        },
-        "list_page": {
-            "keywords": ["list", "items", "records", "results", "列表", "结果"],
-            "elements": ["table", ".list", ".items", "ul li", ".grid"],
-            "indicators": ["pagination", "page", "next", "previous"]
-        },
-        "detail_page": {
-            "keywords": ["detail", "info", "详情", "详细信息"],
-            "patterns": [r"/\d+$", r"/item/", r"/product/", r"/detail/"]
-        },
-        "form_page": {
-            "keywords": ["form", "submit", "填写", "提交"],
-            "required": ["form"]
-        },
-        "dashboard": {
-            "keywords": ["dashboard", "控制台", "仪表盘", "概览", "overview", "home", "首页"],
-            "url_patterns": [r"^/$", r"/dashboard", r"/home", r"/index"]
-        },
-        "profile_page": {
-            "keywords": ["profile", "account", "settings", "个人资料", "账户", "设置"],
-            "url_patterns": [r"/profile", r"/account", r"/settings", r"/user/"]
-        },
-        "cart_page": {
-            "keywords": ["cart", "basket", "购物车", "购物袋"],
-            "url_patterns": [r"/cart", r"/basket"]
-        },
-        "checkout_page": {
-            "keywords": ["checkout", "结算", "结账", "支付", "payment"],
-            "url_patterns": [r"/checkout", r"/payment"]
-        }
+    PAGE_TYPES = {
+        "login": ["登录", "login", "signin", "sign-in", "账号", "密码", "password"],
+        "list": ["列表", "list", "管理", "manage", "表格", "table", "查询", "search"],
+        "form": ["新增", "添加", "create", "add", "编辑", "edit", "修改", "表单", "form"],
+        "detail": ["详情", "detail", "查看", "view", "信息", "info"],
+        "dashboard": ["仪表盘", "dashboard", "首页", "home", "概览", "overview", "统计"],
+        "report": ["报表", "report", "统计", "statistics", "图表", "chart"],
+        "settings": ["设置", "setting", "配置", "config", "偏好", "preference"]
     }
 
-    def __init__(self, input_dir: str):
-        self.input_dir = Path(input_dir)
-        self.pages_dir = self.input_dir / "pages"
-        self.page_tree_file = self.input_dir / "page_tree.json"
+    ELEMENT_PATTERNS = {
+        "submit_button": ["提交", "保存", "确定", "确认", "submit", "save", "confirm", "ok"],
+        "cancel_button": ["取消", "关闭", "返回", "cancel", "close", "back", "return"],
+        "delete_button": ["删除", "remove", "delete", "del"],
+        "edit_button": ["编辑", "修改", "edit", "modify"],
+        "add_button": ["新增", "添加", "创建", "add", "create", "new"],
+        "search_input": ["搜索", "查询", "search", "关键词", "keyword"],
+        "pagination": ["上一页", "下一页", "上一页", "分页", "pagination", "prev", "next"],
+        "table_element": ["table", "el-table", "ant-table", "data-table", "grid"],
+        "form_element": ["form", "el-form", "ant-form", "input", "select", "textarea"]
+    }
 
-        self.page_tree: Dict = {}
-        self.analysis_results: Dict[str, dict] = {}
+    def analyze_pages(self, input_dir: str) -> dict:
+        """分析所有页面"""
+        data_dir = Path(input_dir)
+        pages_dir = data_dir / "pages"
 
-    def load_page_tree(self):
-        """加载页面树"""
-        if not self.page_tree_file.exists():
-            print(f"ERROR: 页面树文件不存在: {self.page_tree_file}")
-            sys.exit(1)
+        if not pages_dir.exists():
+            print(f"ERROR: 页面目录不存在: {pages_dir}")
+            return {"error": "pages directory not found"}
 
-        with open(self.page_tree_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            self.page_tree = data.get("pages", {})
+        meta_files = list(pages_dir.glob("*_meta.json"))
+        print(f"📊 找到 {len(meta_files)} 个页面元数据文件\n")
 
-        print(f"📁 加载页面树: {len(self.page_tree)} 个页面")
+        analyzed_pages = []
+        all_elements = []
+        interaction_flows = []
 
-    def _load_page_data(self, url: str) -> Optional[dict]:
-        """加载单个页面的数据"""
-        if url not in self.page_tree:
-            return None
+        for meta_file in meta_files:
+            with open(meta_file, "r", encoding="utf-8") as f:
+                meta = json.load(f)
 
-        page_info = self.page_tree[url]
-        page_id = page_info["page_id"]
+            analysis = self._analyze_single_page(meta)
+            analyzed_pages.append(analysis)
+            all_elements.extend(analysis.get("key_elements", []))
 
-        html_file = self.pages_dir / f"{page_id}.html"
-        meta_file = self.pages_dir / f"{page_id}_meta.json"
-
-        if not html_file.exists():
-            return None
+        flows = self._detect_interaction_flows(analyzed_pages)
 
         result = {
-            "url": url,
-            "page_id": page_id,
-            "page_tree_info": page_info,
-            "html": html_file.read_text(encoding="utf-8"),
+            "analysis_time": meta_files[0].stat().st_mtime if meta_files else None,
+            "total_pages": len(analyzed_pages),
+            "pages": analyzed_pages,
+            "interaction_flows": flows,
+            "summary": self._generate_summary(analyzed_pages, flows)
         }
-
-        if meta_file.exists():
-            with open(meta_file, "r", encoding="utf-8") as f:
-                result["meta"] = json.load(f)
 
         return result
 
-    def _detect_page_type(self, page_data: dict) -> List[str]:
+    def _analyze_single_page(self, meta: dict) -> dict:
+        """分析单个页面"""
+        name = meta.get("name", "unknown")
+        title = meta.get("title", "")
+        url = meta.get("url", "")
+        elements = meta.get("interactive_elements", [])
+
+        page_type = self._detect_page_type(title, name, url, elements)
+        categorized_elements = self._categorize_elements(elements)
+        form_fields = self._extract_form_fields(elements)
+        navigation_elements = self._find_navigation_elements(elements)
+
+        analysis = {
+            "name": name,
+            "url": url,
+            "title": title,
+            "type": page_type,
+            "load_time_ms": meta.get("load_time_ms"),
+            "elements_count": meta.get("elements_count", 0),
+            "key_elements": categorized_elements,
+            "form_fields": form_fields,
+            "navigation": navigation_elements,
+            "has_table": any(e.get("category") == "table_element" for e in categorized_elements),
+            "has_form": any(e.get("category") == "form_element" for e in categorized_elements),
+            "has_search": any(e.get("category") == "search_input" for e in categorized_elements),
+            "potential_actions": self._infer_actions(categorized_elements, page_type)
+        }
+
+        return analysis
+
+    def _detect_page_type(self, title: str, name: str, url: str, elements: list) -> str:
         """检测页面类型"""
-        detected_types = []
-        soup = BeautifulSoup(page_data["html"], "html.parser")
+        combined_text = f"{title} {name} {url}".lower()
 
-        # 提取页面文本
-        page_text = soup.get_text(separator=" ", strip=True).lower()
-        page_title = (page_data.get("meta", {}).get("title") or "").lower()
-        url = page_data["url"].lower()
+        scores = {}
+        for page_type, keywords in self.PAGE_TYPES.items():
+            score = sum(1 for kw in keywords if kw.lower() in combined_text)
+            scores[page_type] = score
 
-        for page_type, patterns in self.PAGE_TYPE_PATTERNS.items():
-            score = 0
+        element_text = " ".join([e.get("text", "").lower() for e in elements])
+        for page_type, keywords in self.PAGE_TYPES.items():
+            extra_score = sum(1 for kw in keywords if kw.lower() in element_text)
+            scores[page_type] = scores.get(page_type, 0) + extra_score * 0.5
 
-            # 关键词匹配
-            keywords = patterns.get("keywords", [])
-            for kw in keywords:
-                if kw in page_text or kw in page_title:
-                    score += 2
+        best_type = max(scores, key=scores.get) if scores else "unknown"
+        return best_type if scores[best_type] > 0 else "unknown"
 
-            # URL 模式匹配
-            url_patterns = patterns.get("url_patterns", [])
-            for pattern in url_patterns:
-                if re.search(pattern, url, re.IGNORECASE):
-                    score += 3
+    def _categorize_elements(self, elements: list) -> list:
+        """分类元素"""
+        categorized = []
 
-            # 元素检查
-            required_elements = patterns.get("required", [])
-            for elem in required_elements:
-                if soup.select(elem):
-                    score += 3
+        for elem in elements:
+            elem_text = elem.get("text", "").lower()
+            elem_class = elem.get("class", "").lower()
+            elem_tag = elem.get("tag", "").lower()
+            combined = f"{elem_text} {elem_class} {elem_tag}"
 
-            # 可选元素检查
-            elements = patterns.get("elements", [])
-            for elem in elements:
-                if soup.select(elem):
-                    score += 1
+            category = "other"
+            for cat_name, patterns in self.ELEMENT_PATTERNS.items():
+                if any(p.lower() in combined for p in patterns):
+                    category = cat_name
+                    break
 
-            # 特殊指标检查
-            indicators = patterns.get("indicators", [])
-            for ind in indicators:
-                if ind in page_text:
-                    score += 1
+            elem["category"] = category
+            categorized.append(elem)
 
-            # 如果得分足够高，认为是该类型
-            if score >= 3:
-                detected_types.append({"type": page_type, "confidence": min(score / 10, 1.0)})
+        return categorized
 
-        # 按置信度排序
-        detected_types.sort(key=lambda x: x["confidence"], reverse=True)
-        return detected_types
+    def _extract_form_fields(self, elements: list) -> list:
+        """提取表单字段"""
+        form_fields = []
 
-    def _analyze_forms(self, page_data: dict) -> List[dict]:
-        """分析表单功能"""
-        forms = []
-        soup = BeautifulSoup(page_data["html"], "html.parser")
-
-        for form in soup.find_all("form"):
-            form_analysis = {
-                "action": form.get("action", ""),
-                "method": form.get("method", "get").upper(),
-                "purpose": "unknown",
-                "fields": [],
-                "submit_buttons": []
-            }
-
-            # 分析输入字段
-            for inp in form.find_all(["input", "textarea", "select"]):
-                field = {
-                    "tag": inp.name,
-                    "type": inp.get("type", "text"),
-                    "name": inp.get("name", ""),
-                    "id": inp.get("id", ""),
-                    "placeholder": inp.get("placeholder", ""),
-                    "required": inp.get("required") is not None,
+        for elem in elements:
+            if elem.get("tag") in ["input", "select", "textarea"]:
+                field_info = {
+                    "tag": elem.get("tag"),
+                    "type": elem.get("type", "text"),
+                    "id": elem.get("id", ""),
+                    "class": elem.get("class", ""),
+                    "placeholder": elem.get("text", ""),
+                    "selector": elem.get("selector", ""),
+                    "likely_field": self._guess_field_name(elem)
                 }
-                form_analysis["fields"].append(field)
+                form_fields.append(field_info)
 
-            # 分析提交按钮
-            for btn in form.find_all(["button", "input"], {"type": ["submit", "button"]}):
-                btn_text = btn.get_text(strip=True) or btn.get("value", "")
-                form_analysis["submit_buttons"].append({
-                    "text": btn_text,
-                    "type": btn.get("type", "button")
+        return form_fields
+
+    def _guess_field_name(self, elem: dict) -> str:
+        """猜测字段名称"""
+        text = elem.get("text", "").lower()
+        elem_class = elem.get("class", "").lower()
+        elem_id = elem.get("id", "").lower()
+
+        field_patterns = {
+            "username": ["用户名", "username", "user", "账号", "account"],
+            "password": ["密码", "password", "pwd"],
+            "email": ["邮箱", "email", "mail"],
+            "phone": ["手机", "电话", "phone", "mobile", "tel"],
+            "name": ["姓名", "名字", "name"],
+            "search": ["搜索", "查询", "search", "关键词", "keyword"],
+            "date": ["日期", "date", "时间", "time"],
+            "address": ["地址", "address"],
+            "remark": ["备注", "说明", "remark", "note", "描述", "description"]
+        }
+
+        combined = f"{text} {elem_class} {elem_id}"
+        for field_name, patterns in field_patterns.items():
+            if any(p in combined for p in patterns):
+                return field_name
+
+        return "unknown"
+
+    def _find_navigation_elements(self, elements: list) -> list:
+        """查找导航元素"""
+        nav_elements = []
+
+        for elem in elements:
+            if elem.get("tag") == "a":
+                nav_elements.append({
+                    "text": elem.get("text", ""),
+                    "selector": elem.get("selector", ""),
+                    "type": "link"
+                })
+            elif elem.get("category") in ["submit_button", "cancel_button", "delete_button",
+                                           "edit_button", "add_button", "pagination"]:
+                nav_elements.append({
+                    "text": elem.get("text", ""),
+                    "selector": elem.get("selector", ""),
+                    "type": elem.get("category", "button")
                 })
 
-            # 推断表单用途
-            fields_text = " ".join([f.get("name", "") + " " + f.get("placeholder", "") for f in form_analysis["fields"]]).lower()
+        return nav_elements
 
-            if "password" in fields_text and ("login" in page_data["url"].lower() or "signin" in page_data["url"].lower()):
-                form_analysis["purpose"] = "login"
-            elif "password" in fields_text and ("register" in page_data["url"].lower() or "signup" in page_data["url"].lower()):
-                form_analysis["purpose"] = "registration"
-            elif any(kw in fields_text for kw in ["search", "query", "q", "keyword"]):
-                form_analysis["purpose"] = "search"
-            elif "email" in fields_text and "password" not in fields_text:
-                form_analysis["purpose"] = "subscription"
-            elif any(kw in fields_text for kw in ["comment", "message", "feedback"]):
-                form_analysis["purpose"] = "contact"
-            elif form_analysis["fields"]:
-                form_analysis["purpose"] = "data_input"
+    def _infer_actions(self, elements: list, page_type: str) -> list:
+        """推断可执行的操作"""
+        actions = []
 
-            forms.append(form_analysis)
+        action_map = {
+            "login": ["填写用户名", "填写密码", "点击登录", "验证跳转"],
+            "list": ["加载数据", "点击搜索", "切换页码", "点击行操作", "点击新增", "点击编辑", "点击删除"],
+            "form": ["填写表单字段", "点击提交", "验证必填项", "检查格式"],
+            "detail": ["查看信息", "点击编辑", "点击删除", "点击返回"],
+            "dashboard": ["查看统计数据", "刷新数据", "切换时间范围"],
+            "settings": ["修改配置", "保存设置", "重置默认值"]
+        }
 
-        return forms
+        base_actions = action_map.get(page_type, ["查看内容"])
 
-    def _analyze_interactions(self, page_data: dict, forms: List[dict]) -> List[dict]:
-        """分析用户交互流程"""
-        interactions = []
-        soup = BeautifulSoup(page_data["html"], "html.parser")
+        for elem in elements:
+            cat = elem.get("category", "")
+            if cat in ["submit_button", "add_button", "edit_button", "delete_button"]:
+                action_text = elem.get("text", cat)
+                if action_text and action_text not in [a for a in actions]:
+                    actions.append(f"点击{action_text}")
 
-        # 1. 表单提交流程
-        for form in forms:
-            if form["purpose"] != "unknown":
-                flow = {
-                    "type": f"{form['purpose']}_submission",
-                    "description": f"{form['purpose'].replace('_', ' ').title()} form submission",
-                    "steps": [],
-                    "involves_api": bool(form["action"]),
-                    "api_endpoint": form["action"]
-                }
+        return base_actions + actions
 
-                for field in form["fields"]:
-                    if field["type"] not in ["hidden", "submit"]:
-                        step = f"Fill {field['name'] or field['type']} field"
-                        if field["required"]:
-                            step += " (required)"
-                        flow["steps"].append(step)
-
-                if form["submit_buttons"]:
-                    flow["steps"].append(f"Click submit button: {form['submit_buttons'][0]['text']}")
-
-                interactions.append(flow)
-
-        # 2. 导航交互
-        nav_links = soup.find_all("a", href=True)
-        if len(nav_links) > 0:
-            # 检测主导航菜单
-            nav_selectors = ["nav", ".nav", ".navbar", ".menu", ".sidebar", "header"]
-            for selector in nav_selectors:
-                nav_elem = soup.select_one(selector)
-                if nav_elem:
-                    links = nav_elem.find_all("a", href=True)
-                    if len(links) >= 2:
-                        interactions.append({
-                            "type": "navigation",
-                            "description": f"Navigation via {selector}",
-                            "steps": [f"Click {a.get_text(strip=True) or a['href']}" for a in links[:5]],
-                            "total_links": len(links)
-                        })
-                        break
-
-        # 3. 按钮交互
-        buttons = soup.find_all("button")
-        for btn in buttons:
-            btn_text = btn.get_text(strip=True)
-            if btn_text and len(btn_text) < 50:
-                onclick = btn.get("onclick", "")
-                if onclick or btn.get("type") == "button":
-                    interactions.append({
-                        "type": "button_click",
-                        "description": f"Click '{btn_text}' button",
-                        "element": btn.get("id") or btn.get("class") or btn.name,
-                        "triggers_action": bool(onclick)
-                    })
-
-        return interactions
-
-    def _extract_data_entities(self, page_data: dict) -> List[dict]:
-        """提取页面上显示的数据实体"""
-        entities = []
-        soup = BeautifulSoup(page_data["html"], "html.parser")
-
-        # 1. 表格数据
-        tables = soup.find_all("table")
-        for i, table in enumerate(tables):
-            headers = [th.get_text(strip=True) for th in table.find_all("th")]
-            if headers:
-                entities.append({
-                    "type": "table",
-                    "name": f"Table_{i}",
-                    "columns": headers,
-                    "row_count": len(table.find_all("tr")) - 1  # 减去表头行
-                })
-
-        # 2. 列表数据
-        lists = soup.find_all(["ul", "ol"])
-        for i, lst in enumerate(lists):
-            items = lst.find_all("li", recursive=False)
-            if len(items) > 2:
-                sample_items = [item.get_text(strip=True)[:50] for item in items[:3]]
-                entities.append({
-                    "type": "list",
-                    "name": f"List_{i}",
-                    "item_count": len(items),
-                    "sample_items": sample_items
-                })
-
-        # 3. 卡片/卡片组
-        cards = soup.find_all(class_=re.compile(r"card|item|product", re.I))
-        if cards:
-            entities.append({
-                "type": "cards",
-                "count": len(cards),
-                "sample_structure": self._extract_card_structure(cards[0]) if cards else None
-            })
-
-        return entities
-
-    def _extract_card_structure(self, card) -> dict:
-        """提取卡片结构"""
-        structure = {}
-
-        # 查找图片
-        img = card.find("img")
-        if img:
-            structure["has_image"] = True
-            structure["image_alt"] = img.get("alt", "")
-
-        # 查找标题
-        title = card.find(["h1", "h2", "h3", "h4", ".title", ".name"])
-        if title:
-            structure["title"] = title.get_text(strip=True)[:50]
-
-        # 查找描述
-        desc = card.find(["p", ".description", ".desc", ".summary"])
-        if desc:
-            structure["description_preview"] = desc.get_text(strip=True)[:100]
-
-        # 查找按钮/链接
-        action = card.find(["a", "button"])
-        if action:
-            structure["action_text"] = action.get_text(strip=True)
-
-        return structure
-
-    def _identify_user_flows(self, page_data: dict, page_type: List[dict], forms: List[dict]) -> List[dict]:
-        """识别用户在当前页面可能的操作流程"""
+    def _detect_interaction_flows(self, pages: list) -> list:
+        """检测交互流程"""
         flows = []
 
-        # 基于页面类型的典型流程
-        if page_type and page_type[0]["type"] == "login_page":
-            flows.append({
-                "name": "用户登录",
-                "steps": ["输入用户名", "输入密码", "点击登录", "等待跳转"],
-                "expected_outcome": "登录成功并跳转到首页或仪表盘"
-            })
+        login_pages = [p for p in pages if p["type"] == "login"]
+        list_pages = [p for p in pages if p["type"] == "list"]
+        form_pages = [p for p in pages if p["type"] == "form"]
 
-        elif page_type and page_type[0]["type"] == "register_page":
-            flows.append({
-                "name": "用户注册",
-                "steps": ["输入用户名", "输入邮箱", "输入密码", "确认密码", "点击注册"],
-                "expected_outcome": "注册成功或提示验证邮箱"
-            })
+        if login_pages:
+            login_flow = {
+                "name": "用户登录流程",
+                "steps": [
+                    {"action": "访问登录页", "target": login_pages[0]["name"]},
+                    {"action": "输入凭证", "target": "登录表单"},
+                    {"action": "点击登录按钮", "target": "提交"},
+                    {"action": "验证跳转", "target": "首页或仪表盘"}
+                ],
+                "entry_point": login_pages[0]["url"]
+            }
+            flows.append(login_flow)
 
-        elif page_type and page_type[0]["type"] == "search_page":
-            flows.append({
-                "name": "搜索内容",
-                "steps": ["输入搜索关键词", "点击搜索按钮/按回车", "查看搜索结果"],
-                "expected_outcome": "显示匹配的搜索结果列表"
-            })
+        if list_pages:
+            for lp in list_pages:
+                crumb_flow = {
+                    "name": f"{lp['name']}浏览流程",
+                    "steps": [
+                        {"action": "访问列表页", "target": lp["name"]},
+                        {"action": "查看数据加载", "target": "表格/列表"},
+                    ]
+                }
 
-        # 通用流程：从表单推断
-        for form in forms:
-            if form["purpose"] == "search" and not any(f["name"] == "搜索内容" for f in flows):
-                flows.append({
-                    "name": "搜索内容",
-                    "steps": [f"填写 {field['name']}" for field in form["fields"] if field["type"] != "submit"] + ["提交搜索"],
-                    "expected_outcome": "显示搜索结果"
-                })
+                if lp.get("has_search"):
+                    crumb_flow["steps"].append({"action": "执行搜索/筛选", "target": "搜索框"})
+
+                crumb_flow["steps"].extend([
+                    {"action": "点击分页", "target": "分页组件"} if lp.get("navigation") else {},
+                    {"action": "点击操作按钮", "target": "行内按钮"}
+                ])
+                crumb_flow["steps"] = [s for s in crumb_flow["steps"] if s]
+
+                if form_pages:
+                    crumb_flow["steps"].append({"action": "进入表单页", "target": form_pages[0]["name"]})
+                    crumb_flow["steps"].append({"action": "填写并提交", "target": "表单"})
+                    crumb_flow["steps"].append({"action": "返回列表验证", "target": lp["name"]})
+
+                crumb_flow["entry_point"] = lp["url"]
+                flows.append(crumb_flow)
 
         return flows
 
-    def analyze_page(self, url: str) -> Optional[dict]:
-        """分析单个页面"""
-        page_data = self._load_page_data(url)
-        if not page_data:
-            return None
+    def _generate_summary(self, pages: list, flows: list) -> dict:
+        """生成分析摘要"""
+        type_counts = {}
+        for p in pages:
+            t = p["type"]
+            type_counts[t] = type_counts.get(t, 0) + 1
 
-        print(f"  📄 分析: {url}")
+        total_actions = sum(len(p.get("potential_actions", [])) for p in pages)
+        total_forms = sum(1 for p in pages if p.get("has_form"))
 
-        # 1. 检测页面类型
-        page_types = self._detect_page_type(page_data)
-
-        # 2. 分析表单
-        forms = self._analyze_forms(page_data)
-
-        # 3. 分析交互
-        interactions = self._analyze_interactions(page_data, forms)
-
-        # 4. 提取数据实体
-        entities = self._extract_data_entities(page_data)
-
-        # 5. 识别用户流程
-        user_flows = self._identify_user_flows(page_data, page_types, forms)
-
-        # 构建分析结果
-        result = {
-            "url": url,
-            "page_id": page_data["page_id"],
-            "title": page_data.get("meta", {}).get("title"),
-            "page_types": page_types,
-            "primary_type": page_types[0]["type"] if page_types else "unknown",
-            "features": {
-                "forms": forms,
-                "interactions": interactions,
-                "data_entities": entities,
-                "user_flows": user_flows
-            },
-            "statistics": {
-                "form_count": len(forms),
-                "interaction_count": len(interactions),
-                "entity_count": len(entities),
-                "flow_count": len(user_flows)
-            }
+        return {
+            "page_types": type_counts,
+            "total_interaction_flows": len(flows),
+            "total_potential_actions": total_actions,
+            "total_forms": total_forms,
+            "test_complexity": "high" if total_actions > 50 else ("medium" if total_actions > 20 else "low")
         }
-
-        return result
-
-    def analyze_all(self) -> dict:
-        """分析所有页面"""
-        self.load_page_tree()
-
-        print(f"🔍 开始分析 {len(self.page_tree)} 个页面...")
-
-        for url in self.page_tree:
-            result = self.analyze_page(url)
-            if result:
-                self.analysis_results[url] = result
-
-        print(f"✅ 分析完成: {len(self.analysis_results)} 个页面")
-
-        return self.analysis_results
-
-    def save_results(self, output_file: str):
-        """保存分析结果"""
-        output_path = Path(output_file)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # 构建完整输出
-        output_data = {
-            "summary": {
-                "total_pages": len(self.analysis_results),
-                "page_types": self._summarize_page_types(),
-                "total_forms": sum(r["statistics"]["form_count"] for r in self.analysis_results.values()),
-                "total_interactions": sum(r["statistics"]["interaction_count"] for r in self.analysis_results.values()),
-                "total_flows": sum(r["statistics"]["flow_count"] for r in self.analysis_results.values())
-            },
-            "pages": self.analysis_results
-        }
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(output_data, f, ensure_ascii=False, indent=2)
-
-        print(f"📁 分析结果已保存: {output_path}")
-
-    def _summarize_page_types(self) -> dict:
-        """统计页面类型分布"""
-        type_count = {}
-        for result in self.analysis_results.values():
-            ptype = result.get("primary_type", "unknown")
-            type_count[ptype] = type_count.get(ptype, 0) + 1
-        return type_count
 
 
 def main():
     parser = argparse.ArgumentParser(description="页面功能分析器")
-    parser.add_argument("--input-dir", "-i", required=True, help="crawler 输出目录")
-    parser.add_argument("--output", "-o", default="./test_data/page_analysis.json", help="输出文件路径")
+    parser.add_argument("--input-dir", "-i", required=True, help="输入目录（包含 pages/ 子目录）")
+    parser.add_argument("--output", "-o", default=None, help="输出路径（默认 input_dir/page_analysis.json）")
     args = parser.parse_args()
 
-    analyzer = PageAnalyzer(args.input_dir)
-    analyzer.analyze_all()
-    analyzer.save_results(args.output)
+    analyzer = PageAnalyzer()
+    result = analyzer.analyze_pages(args.input_dir)
+
+    output_path = args.output or f"{args.input_dir}/page_analysis.json"
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    print(f"\n✅ 分析完成！结果已保存: {output_path}")
+    print(f"\n📊 分析摘要:")
+    summary = result.get("summary", {})
+    print(f"   页面类型分布: {summary.get('page_types', {})}")
+    print(f"   发现交互流程: {summary.get('total_interaction_flows', 0)}")
+    print(f"   潜在测试动作: {summary.get('total_potential_actions', 0)}")
+    print(f"   测试复杂度: {summary.get('test_complexity', 'unknown')}")
 
 
 if __name__ == "__main__":
